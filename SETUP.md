@@ -12,10 +12,41 @@ Hosted at **holdat.ffhistorian.com** (Cloudflare Pages). No build step.
 holdat/
 ├── index.html                 # the whole page (HTML + CSS + JS, no framework)
 ├── functions/api/fantrax.js   # Pages Function — proxies Fantrax fxpa with stored cookie
+├── functions/api/bbm.js       # Pages Function — scrapes Basketball Monster "BZ" (Bazemore) values
 ├── wrangler.toml              # Pages config (pages_build_output_dir = ".")
-├── .dev.vars                  # local-only Fantrax cookie (gitignored)
+├── .dev.vars                  # local-only cookies, FANTRAX_COOKIE + BBM_COOKIE (gitignored)
 └── SETUP.md
 ```
+
+## Secrets
+
+Two cookies, both stored as Pages secrets (server-side only, never sent to the browser):
+
+| Secret | What | Refresh when |
+|--------|------|--------------|
+| `FANTRAX_COOKIE` | Fantrax session (`JSESSIONID` + friends) | page shows "Fantrax session expired" |
+| `BBM_COOKIE` | Basketball Monster session (`ASP.NET_SessionId` + `RotoMonsterUserId`) | Overall note shows "Basketball Monster unavailable" |
+
+```bash
+npx wrangler pages secret put FANTRAX_COOKIE
+npx wrangler pages secret put BBM_COOKIE
+```
+
+Locally, both live in `.dev.vars` (gitignored) as `NAME="value"` lines.
+
+## Basketball Monster (BZ / Bazemore dynasty value)
+
+`/api/bbm` GETs basketballmonster.com/playerrankings.aspx with `BBM_COOKIE`, then
+re-posts the form flipping the player filter to **All Players** (~582 vs ~370),
+inheriting the account's saved **HOLDAT league + BZ (Bazemore) column** config. It
+parses `{ normalizedName: bzValue }` and caches ~6h. The client matches by
+normalized name (~97% of rostered players) and uses the **sum of BZ** for the
+**Overall** rank (falls back to the 9-cat z-score if BBM is unavailable).
+
+Requirements on the BBM account: the **BZ column must stay in the saved display
+config**, and the league dropdown should be the HOLDAT league. ~11 players miss on
+name-format (Alexandre vs Alex Sarr, Herb vs Herbert Jones, Bub vs Carlton
+Carrington…) or season-ending injuries — candidates for a future alias map.
 
 ## How Fantrax access works
 

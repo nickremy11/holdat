@@ -164,6 +164,8 @@
   .spin { display: inline-block; width: 20px; height: 20px; border: 3px solid var(--line); border-top-color: var(--orange); border-radius: 50%; animation: sp 1s linear infinite; vertical-align: middle; margin-right: 10px; }
   @keyframes sp { to { transform: rotate(360deg); } }
   a { color: var(--teal); }
+  .note { color: var(--ink3); font-size: 12px; font-weight: 600; margin: -8px 0 16px; }
+  .note b { color: var(--gold); }
 
   /* narrower screens: let the row wrap and collapse the 5 columns */
   @media (max-width: 1100px) {
@@ -207,6 +209,7 @@
     </header>
 
     <div class="sortbar" id="sortbar"></div>
+    <div class="note" id="overallNote"></div>
     <div id="app"><div class="msg"><span class="spin"></span>Loading league…</div></div>
   </div>
 
@@ -224,11 +227,36 @@ const PLAYER_VAL_CATS = ['PTS','REB','AST','ST','BLK','3PTM','TO'];
 
 let DATA = null;
 let SORT = 'overall';
+// Basketball Monster "BZ" (Bazemore dynasty value) — { normName: bz }
+const BBM = { map: {}, count: 0, loaded: false };
 
 // ---------- helpers ----------
 const $ = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const qparam = (k) => new URLSearchParams(location.search).get(k);
+// display-only: drop the generic G/F slots (implied by PG/SG/SF/PF); keep PG,SG,SF,PF,C
+const displayPos = (pos) => String(pos || '').split(',').map(s => s.trim())
+  .filter(p => p && p !== 'G' && p !== 'F').join(',');
+// player-name key for matching Fantrax <-> dynasty-value source (must mirror server normName)
+const normName = (s) => String(s || '').toLowerCase()
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '')
+  .replace(/[^a-z0-9]/g, '');
+// Fantrax-name -> source-name overrides where spellings differ (both sides normalized)
+const NAME_ALIAS = {
+  alexsarr: 'alexandresarr',
+  carltoncarrington: 'bubcarrington',
+  herbertjones: 'herbjones',
+  cameronjohnson: 'camjohnson',
+  cameronthomas: 'camthomas',
+};
+// dynasty value (BZ) for a player name, applying aliases; null if no match
+function dynValueFor(name) {
+  if (!BBM.loaded) return null;
+  const n = normName(name);
+  const v = BBM.map[n] ?? (NAME_ALIAS[n] != null ? BBM.map[NAME_ALIAS[n]] : undefined);
+  return v == null ? null : v;
+}
 
 function rankColor(rank, total) {
   if (!rank || !total || total < 2) return '#9aa3af';
@@ -330,12 +358,32 @@ function computeRanks(teams) {
     return acc + z;
   }, 0);
 
-  // attach player value + bucket
-  teams.forEach(t => t.players.forEach(p => { p._val = pVal(p); p._bucket = posBucket(p.pos); }));
+  // attach player value + bucket + dynasty value (BZ, if matched)
+  teams.forEach(t => t.players.forEach(p => {
+    p._val = pVal(p);
+    p._bucket = posBucket(p.pos);
+    p._bz = dynValueFor(p.name);
+  }));
 
-  // OVERALL — all players
-  const overallRows = teams.map(t => ({ team: t, cats: aggregate(t.players) }));
-  const overallRank = rankFromScores(zScore(overallRows));
+  // OVERALL — sum of dynasty value (BZ) when available; else 9-cat z-score.
+  // Negative handling: sort matched players by value desc; count the top 12 as-is,
+  // and for the 13th+ only count positives (negatives -> 0). So deep-bench negatives
+  // never drag a team down, but a team's best 12 (plus any extra positive depth) count.
+  let overallRank, overallSource;
+  if (BBM.loaded && BBM.count) {
+    teams.forEach(t => {
+      const vals = t.players.map(p => p._bz).filter(v => v != null).sort((a, b) => b - a);
+      t._bzMatched = vals.length;
+      t._bzSum = vals.reduce((s, v, i) => s + (i < 12 ? v : Math.max(0, v)), 0);
+    });
+    overallRank = rankFromScores(new Map(teams.map(t => [t.id, t._bzSum])));
+    overallSource = 'bz';
+  } else {
+    const overallRows = teams.map(t => ({ team: t, cats: aggregate(t.players) }));
+    overallRank = rankFromScores(zScore(overallRows));
+    overallSource = 'zscore';
+  }
+  DATA._overallSource = overallSource;
 
   // CONTENDER — top 10 players by value
   const contRows = teams.map(t => {
@@ -403,7 +451,7 @@ function renderCard(t, total) {
         <img class="hs" src="${esc(p.headshot||'')}" onerror="this.style.visibility='hidden'" alt="">
         <div class="pinfo">
           <div class="pname">${esc(p.name)}</div>
-          <div class="pmeta">${esc(p.nbaTeam||'FA')} · ${esc(p.pos)}${p.rookie?' · <span class="rook">R</span>':''}${p.age?' · '+p.age:''}</div>
+          <div class="pmeta">${esc(p.nbaTeam||'FA')} · ${esc(displayPos(p.pos))}${p.rookie?' · <span class="rook">R</span>':''}${p.age?' · '+p.age:''}</div>
           <div class="pstats">${statLine(p)}</div>
         </div>
       </div>`).join('') : `<div class="empty-grp">—</div>`;
@@ -509,8 +557,29 @@ function setupSwitch() {
   };
 }
 
+async function loadBBM() {
+  try {
+    const r = await fetch('/api/bbm');
+    const j = await r.json();
+    if (r.ok && j.players) { BBM.map = j.players; BBM.count = j.count || 0; BBM.loaded = true; }
+  } catch (e) { /* optional — Overall falls back to z-score */ }
+}
+
+function renderOverallNote() {
+  const el = $('#overallNote');
+  if (!el) return;
+  if (DATA._overallSource === 'bz') {
+    const totalMatched = DATA.teams.reduce((n, t) => n + (t._bzMatched || 0), 0);
+    const totalPlayers = DATA.teams.reduce((n, t) => n + t.players.length, 0);
+    el.innerHTML = `Overall = <b>dynasty value</b> rank · ${totalMatched}/${totalPlayers} players valued`;
+  } else {
+    el.innerHTML = `Overall = 9-cat z-score · <span style="color:#ff8a8a">dynasty values unavailable</span>`;
+  }
+}
+
 async function load() {
   setupSwitch();
+  const bbmReady = loadBBM(); // fetch BZ in parallel with the league
   try {
     const res = await fetch(`${API}?league=${encodeURIComponent(curLeague())}`);
     const j = await res.json();
@@ -519,8 +588,10 @@ async function load() {
       return;
     }
     DATA = j;
+    await bbmReady;
     computeRanks(DATA.teams);
     renderSortbar();
+    renderOverallNote();
     render();
     if (location.hash === '#openall') document.querySelectorAll('.card').forEach(c => c.classList.add('open'));
   } catch (e) {

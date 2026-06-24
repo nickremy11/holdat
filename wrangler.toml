@@ -1,3 +1,9 @@
 name = "holdat"
 compatibility_date = "2024-11-06"
 pages_build_output_dir = "."
+
+# Shared store for Basketball Monster BZ (Bazemore) values — scraped occasionally,
+# read by all site visitors so they never trigger a live scrape.
+[[kv_namespaces]]
+binding = "BBM_KV"
+id = "578e66a3b0b8433dba0384469aa9dedd"
