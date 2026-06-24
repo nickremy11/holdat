@@ -126,8 +126,8 @@
     width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center;
     justify-content: center; font-size: 12px; font-weight: 900; color: #0c0e12;
   }
-  /* 5 position groups as columns */
-  .groups-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  /* 5 position groups + picks as columns */
+  .groups-cols { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
   .grp { min-width: 0; }
   .grp-h {
     display: flex; align-items: center; gap: 8px; margin: 0 2px 6px;
@@ -148,11 +148,16 @@
   .pstats b { color: var(--ink); }
   .empty-grp { color: var(--ink3); font-size: 12px; padding: 6px 5px; }
 
-  .picks { margin-top: 4px; padding: 10px 2px 2px; border-top: 1px dashed var(--line); }
-  .picks .ph { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--gold); text-transform: uppercase; margin-bottom: 6px; }
-  .picks .pk { display: inline-block; font-size: 11px; color: var(--ink2); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; margin: 0 5px 5px 0; font-weight: 700; }
-  .picks .pk b { color: var(--ink); }
-  .picks .pk.acq { border-color: var(--teal); }
+  /* picks column (6th group) */
+  .pick-col .grp-h { color: var(--gold); }
+  .pk-year { display: flex; align-items: center; gap: 7px; padding: 4px 5px; }
+  .pk-yr { font-size: 11px; font-weight: 800; color: var(--ink2); width: 32px; flex: none; }
+  .pk-rounds { display: flex; gap: 4px; flex-wrap: wrap; }
+  .pk { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 19px;
+    padding: 0 5px; font-size: 10.5px; font-weight: 800; color: var(--ink2);
+    background: var(--card); border: 1px solid var(--line); border-radius: 5px; }
+  .pk.acq { border-color: var(--teal); color: var(--teal); }
+  .pk.acq::after { content: "↗"; font-size: 8px; margin-left: 1px; }
 
   .msg { text-align: center; color: var(--ink2); padding: 60px 20px; font-size: 15px; font-weight: 600; }
   .msg.err { color: #ff8a8a; }
@@ -393,14 +398,20 @@ function renderCard(t, total) {
     return `<div class="grp"><div class="grp-h">${b}<span class="ln"></span>${ps.length}</div>${rows}</div>`;
   }).join('');
 
-  // picks
-  const picksHtml = (t.picks && t.picks.length)
-    ? `<div class="picks"><div class="ph">Draft Picks</div>` +
-      t.picks.map(y => {
-        const acq = y.detail && y.detail.some(d => d.from && d.from !== t.id);
-        return `<span class="pk${acq?' acq':''}"><b>${y.year}</b> · R${(y.rounds||[]).join(', ')}</span>`;
-      }).join('') + `</div>`
-    : '';
+  // picks — rendered as the 6th column in the roster grid
+  const totalPicks = (t.picks || []).reduce((n, y) => n + (y.rounds || []).length, 0);
+  const picksRows = (t.picks && t.picks.length)
+    ? t.picks.map(y => {
+        const detail = (y.detail && y.detail.length) ? y.detail : (y.rounds || []).map(r => ({ round: r, from: t.id }));
+        const chips = detail.map(d => {
+          const acq = d.from && d.from !== t.id;
+          return `<span class="pk${acq ? ' acq' : ''}" title="${acq ? 'Acquired' : 'Own'} round ${d.round}">${d.round}</span>`;
+        }).join('');
+        return `<div class="pk-year"><span class="pk-yr">${y.year}</span><span class="pk-rounds">${chips}</span></div>`;
+      }).join('')
+    : `<div class="empty-grp">—</div>`;
+  const picksColumn = `<div class="grp pick-col">
+      <div class="grp-h">Picks<span class="ln"></span>${totalPicks}</div>${picksRows}</div>`;
 
   const posBadge = (lbl, rank) =>
     `<div class="pr"><span class="pl">${lbl}</span><span class="pv" style="background:${rankColor(rank,total)}">${rank}</span></div>`;
@@ -427,8 +438,7 @@ function renderCard(t, total) {
         ${posBadge('Forwards', r.pos.F)}
         ${posBadge('Centers', r.pos.C)}
       </div>
-      <div class="groups-cols">${groups}</div>
-      ${picksHtml}
+      <div class="groups-cols">${groups}${picksColumn}</div>
     </div>
   </div>`;
 }
