@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Holdat — Dynasty NBA</title>
+<style>
+  :root {
+    --bg: #16181c;
+    --asphalt: #1c1f24;
+    --card: #1b1f27;
+    --card2: #20242d;
+    --line: #2c313b;
+    --ink: #e8eaed;
+    --ink2: #9aa3af;
+    --ink3: #6b7280;
+    --orange: #ff6b35;
+    --teal: #2dd4bf;
+    --gold: #f2c14e;
+    --court: rgba(245,225,200,.10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* ---------- Blacktop court ---------- */
+  .court-bg {
+    position: fixed; inset: 0; z-index: 0; overflow: hidden;
+    background:
+      radial-gradient(130% 90% at 50% -5%, #2b2622 0%, #221f1c 40%, #141312 100%);
+  }
+  /* asphalt grain */
+  .court-bg::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+    opacity: .14; mix-blend-mode: overlay;
+  }
+  .court-lines { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .court-lines line, .court-lines circle, .court-lines path, .court-lines rect {
+    stroke: var(--court); stroke-width: 3.5; fill: none;
+  }
+  /* ---------- Layout ---------- */
+  .wrap { position: relative; z-index: 1; max-width: 1320px; margin: 0 auto; padding: 28px 20px 80px; }
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 22px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 14px; }
+  .brand h1 {
+    font-size: 34px; font-weight: 900; letter-spacing: 2px;
+    background: linear-gradient(90deg, var(--orange), var(--gold));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-transform: uppercase;
+  }
+  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 600; letter-spacing: 1px; }
+  .controls { display: flex; gap: 10px; align-items: center; }
+  select.lg-switch {
+    background: var(--card); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 12px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .sortbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  .pill {
+    background: var(--card); color: var(--ink2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+    letter-spacing: .3px; transition: all .12s;
+  }
+  .pill:hover { color: var(--ink); border-color: #3a4150; }
+  .pill.active { background: var(--orange); color: #1a1208; border-color: var(--orange); }
+
+  /* ---------- Cards ---------- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+  .card {
+    background: linear-gradient(180deg, var(--card2), var(--card));
+    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 8px 30px rgba(0,0,0,.35); transition: border-color .15s, transform .15s;
+  }
+  .card:hover { border-color: #3c4350; transform: translateY(-2px); }
+  .card-head {
+    display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer;
+    border-bottom: 1px solid var(--line);
+  }
+  .logo {
+    width: 44px; height: 44px; border-radius: 10px; object-fit: cover; flex: none;
+    background: #11141a; border: 1px solid var(--line);
+  }
+  .team-meta { flex: 1; min-width: 0; }
+  .team-name { font-weight: 800; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .team-rec { color: var(--ink3); font-size: 12px; font-weight: 600; margin-top: 2px; }
+  .chev { color: var(--ink3); font-size: 13px; transition: transform .18s; }
+  .card.open .chev { transform: rotate(180deg); }
+
+  .badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 14px 16px; }
+  .badge { text-align: center; }
+  .badge .lbl { font-size: 10px; letter-spacing: 1px; color: var(--ink3); font-weight: 800; text-transform: uppercase; }
+  .badge .rk {
+    margin: 5px auto 0; width: 46px; height: 46px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px; font-weight: 900; color: #0c0e12;
+    box-shadow: 0 0 14px rgba(0,0,0,.4);
+  }
+
+  .catstrip {
+    display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; padding: 0 16px 14px;
+  }
+  .cat {
+    text-align: center; border-radius: 7px; padding: 5px 2px; background: var(--card);
+    border: 1px solid var(--line);
+  }
+  .cat .cn { font-size: 9px; color: var(--ink3); font-weight: 800; letter-spacing: .3px; }
+  .cat .cv { font-size: 13px; font-weight: 900; margin-top: 1px; }
+
+  /* ---------- Expanded roster ---------- */
+  .roster { display: none; padding: 4px 14px 16px; border-top: 1px solid var(--line); }
+  .card.open .roster { display: block; }
+  .posrank { display: flex; gap: 8px; margin: 12px 2px 14px; flex-wrap: wrap; }
+  .posrank .pr {
+    display: flex; align-items: center; gap: 7px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 9px; padding: 6px 11px;
+  }
+  .posrank .pr .pl { font-size: 11px; color: var(--ink2); font-weight: 800; letter-spacing: .5px; }
+  .posrank .pr .pv {
+    width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center;
+    justify-content: center; font-size: 12px; font-weight: 900; color: #0c0e12;
+  }
+  .grp { margin-bottom: 12px; }
+  .grp-h {
+    display: flex; align-items: center; gap: 8px; margin: 0 2px 6px;
+    font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--orange); text-transform: uppercase;
+  }
+  .grp-h .ln { flex: 1; height: 1px; background: var(--line); }
+  .player {
+    display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 9px;
+    padding: 6px 6px; border-radius: 8px;
+  }
+  .player:hover { background: var(--card); }
+  .player img.hs { width: 26px; height: 26px; border-radius: 50%; background: #11141a; object-fit: cover; }
+  .pinfo { min-width: 0; }
+  .pname { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pmeta { font-size: 10px; color: var(--ink3); font-weight: 600; }
+  .pmeta .rook { color: var(--teal); font-weight: 800; }
+  .pstats { font-size: 11px; color: var(--ink2); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pstats b { color: var(--ink); }
+
+  .picks { margin-top: 4px; padding: 10px 2px 2px; border-top: 1px dashed var(--line); }
+  .picks .ph { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--gold); text-transform: uppercase; margin-bottom: 6px; }
+  .picks .pk { display: inline-block; font-size: 11px; color: var(--ink2); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; margin: 0 5px 5px 0; font-weight: 700; }
+  .picks .pk b { color: var(--ink); }
+  .picks .pk.acq { border-color: var(--teal); }
+
+  .msg { text-align: center; color: var(--ink2); padding: 60px 20px; font-size: 15px; font-weight: 600; }
+  .msg.err { color: #ff8a8a; }
+  .spin { display: inline-block; width: 20px; height: 20px; border: 3px solid var(--line); border-top-color: var(--orange); border-radius: 50%; animation: sp 1s linear infinite; vertical-align: middle; margin-right: 10px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  a { color: var(--teal); }
+</style>
+</head>
+<body>
+  <div class="court-bg">
+    <svg class="court-lines" preserveAspectRatio="xMidYMid slice" viewBox="0 0 1000 1000">
+      <!-- center circle -->
+      <circle cx="500" cy="500" r="120" />
+      <circle cx="500" cy="500" r="60" />
+      <line x1="0" y1="500" x2="1000" y2="500" />
+      <!-- top key + arc -->
+      <rect x="385" y="0" width="230" height="190" />
+      <path d="M 385 190 A 115 115 0 0 0 615 190" />
+      <path d="M 150 0 A 350 350 0 0 1 850 0" transform="translate(0,40)" />
+      <!-- bottom key + arc -->
+      <rect x="385" y="810" width="230" height="190" />
+      <path d="M 385 810 A 115 115 0 0 1 615 810" />
+      <path d="M 150 1000 A 350 350 0 0 0 850 1000" transform="translate(0,-40)" />
+    </svg>
+  </div>
+
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <h1>Holdat</h1>
+        <span class="sub" id="subLabel">Dynasty NBA</span>
+      </div>
+      <div class="controls">
+        <select class="lg-switch" id="lgSwitch"></select>
+      </div>
+    </header>
+
+    <div class="sortbar" id="sortbar"></div>
+    <div id="app"><div class="msg"><span class="spin"></span>Loading league…</div></div>
+  </div>
+
+<script>
+const API = '/api/fantrax';
+const LEAGUES = [
+  { id: 'mkuoaxbhmqrct7rf', label: '26-27 Dynasty' },
+  { id: 'zdmn1wu0md6fpz8d', label: '25-26 (History)' },
+];
+const CATS = ['FG%','3PTM','FT%','PTS','REB','AST','ST','BLK','TO'];
+const PCT_CATS = new Set(['FG%','FT%']);
+const LOWER_BETTER = new Set(['TO']);
+// counting cats used to value an individual player (for top-10 contender selection)
+const PLAYER_VAL_CATS = ['PTS','REB','AST','ST','BLK','3PTM','TO'];
+
+let DATA = null;
+let SORT = 'overall';
+
+// ---------- helpers ----------
+const $ = (s, r=document) => r.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const qparam = (k) => new URLSearchParams(location.search).get(k);
+
+function rankColor(rank, total) {
+  if (!rank || !total || total < 2) return '#9aa3af';
+  const t = (rank - 1) / (total - 1);          // 0 best .. 1 worst
+  const hue = 130 - 130 * t;                    // 130 green -> 0 red
+  return `hsl(${hue}, 70%, 52%)`;
+}
+
+function mean(a) { return a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0; }
+function std(a) { if (a.length < 2) return 0; const m = mean(a); return Math.sqrt(mean(a.map(x=>(x-m)**2))); }
+
+// aggregate a set of players into per-category team values
+function aggregate(players) {
+  const out = {};
+  for (const c of CATS) {
+    const vals = players.map(p => p.stats[c]).filter(v => v != null);
+    if (!vals.length) { out[c] = 0; continue; }
+    out[c] = PCT_CATS.has(c) ? mean(vals) : vals.reduce((x,y)=>x+y,0);
+  }
+  return out;
+}
+
+// z-score a list of {team, cats} -> per-team total score (sum of z, TO negated)
+function zScore(rows) {
+  const score = new Map(rows.map(r => [r.team.id, 0]));
+  for (const c of CATS) {
+    const vals = rows.map(r => r.cats[c]);
+    const m = mean(vals), s = std(vals);
+    for (const r of rows) {
+      let z = s ? (r.cats[c] - m) / s : 0;
+      if (LOWER_BETTER.has(c)) z = -z;
+      score.set(r.team.id, score.get(r.team.id) + z);
+    }
+  }
+  return score;
+}
+
+function rankFromScores(scoreMap, higherBetter = true) {
+  const arr = [...scoreMap.entries()].sort((a,b) => higherBetter ? b[1]-a[1] : a[1]-b[1]);
+  const rank = {};
+  arr.forEach(([id], i) => rank[id] = i + 1);
+  return rank;
+}
+
+const PICK_W = { 1: 30, 2: 15, 3: 8, 4: 4 };
+function draftValue(team) {
+  let v = 0;
+  for (const y of (team.picks || [])) {
+    for (const r of (y.rounds || [])) v += PICK_W[r] || 2;
+  }
+  return v;
+}
+
+// ---------- position bucketing ----------
+function posBucket(posStr) {
+  const set = new Set(String(posStr || '').split(',').map(s => s.trim()).filter(Boolean));
+  const isG = set.has('PG') || set.has('SG') || set.has('G');
+  const isF = set.has('SF') || set.has('PF') || set.has('F');
+  const isC = set.has('C');
+  if (isC && !isF && !isG) return 'C';
+  if (isC && isF) return 'F/C';
+  if (isF && !isG && !isC) return 'F';
+  if (isG && isF) return 'G/F';
+  if (isG && !isF) return 'G';
+  if (isC) return 'F/C';
+  return 'G';
+}
+const BUCKET_ORDER = ['G','G/F','F','F/C','C'];
+
+function isGuard(p) { const s = new Set(p.pos.split(',')); return s.has('PG')||s.has('SG')||s.has('G'); }
+function isFwd(p)   { const s = new Set(p.pos.split(',')); return s.has('SF')||s.has('PF')||s.has('F'); }
+function isCtr(p)   { return p.pos.split(',').includes('C'); }
+
+// ---------- compute all ranks ----------
+function computeRanks(teams) {
+  // player pool z (per-player) for contender top-10 selection
+  const pool = {};
+  for (const c of PLAYER_VAL_CATS) {
+    const vals = [];
+    teams.forEach(t => t.players.forEach(p => { if (p.stats[c] != null) vals.push(p.stats[c]); }));
+    pool[c] = { m: mean(vals), s: std(vals) };
+  }
+  const pVal = (p) => PLAYER_VAL_CATS.reduce((acc, c) => {
+    const v = p.stats[c]; if (v == null) return acc;
+    let z = pool[c].s ? (v - pool[c].m) / pool[c].s : 0;
+    if (LOWER_BETTER.has(c)) z = -z;
+    return acc + z;
+  }, 0);
+
+  // attach player value + bucket
+  teams.forEach(t => t.players.forEach(p => { p._val = pVal(p); p._bucket = posBucket(p.pos); }));
+
+  // OVERALL — all players
+  const overallRows = teams.map(t => ({ team: t, cats: aggregate(t.players) }));
+  const overallRank = rankFromScores(zScore(overallRows));
+
+  // CONTENDER — top 10 players by value
+  const contRows = teams.map(t => {
+    const top = [...t.players].sort((a,b) => b._val - a._val).slice(0, 10);
+    return { team: t, cats: aggregate(top) };
+  });
+  const contRank = rankFromScores(zScore(contRows));
+
+  // DRAFT
+  const draftRank = rankFromScores(new Map(teams.map(t => [t.id, draftValue(t)])));
+
+  // PER-CATEGORY ranks
+  const catRank = {};
+  for (const c of CATS) {
+    const vals = teams.map(t => ({ id: t.id, v: aggregate(t.players)[c] }));
+    vals.sort((a,b) => LOWER_BETTER.has(c) ? a.v - b.v : b.v - a.v);
+    catRank[c] = {}; vals.forEach((x,i) => catRank[c][x.id] = i + 1);
+  }
+
+  // POSITIONAL group ranks (Guard / Forward / Center pools)
+  const posRank = {};
+  [['G', isGuard], ['F', isFwd], ['C', isCtr]].forEach(([key, pred]) => {
+    const rows = teams.map(t => ({ team: t, cats: aggregate(t.players.filter(pred)) }));
+    posRank[key] = rankFromScores(zScore(rows));
+  });
+
+  teams.forEach(t => {
+    t._rank = {
+      overall: overallRank[t.id],
+      contender: contRank[t.id],
+      draft: draftRank[t.id],
+      cats: Object.fromEntries(CATS.map(c => [c, catRank[c][t.id]])),
+      pos: { G: posRank.G[t.id], F: posRank.F[t.id], C: posRank.C[t.id] },
+    };
+  });
+}
+
+// ---------- render ----------
+function statLine(p) {
+  const f = (v, d=1) => v == null ? '–' : v.toFixed(d);
+  return `<b>${f(p.stats.PTS)}</b>p · ${f(p.stats.REB)}r · ${f(p.stats.AST)}a · `
+    + `${f(p.stats.ST)}s · ${f(p.stats.BLK)}b · ${f(p.stats['3PTM'])} 3pm`;
+}
+
+function renderCard(t, total) {
+  const r = t._rank;
+  const rec = t.record || {};
+  const recTxt = (rec.w != null) ? `${rec.w}-${rec.l}${rec.t ? '-' + rec.t : ''} · #${t.rank ?? '–'}` : `#${t.rank ?? '–'}`;
+
+  const badge = (lbl, rank) =>
+    `<div class="badge"><div class="lbl">${lbl}</div>
+       <div class="rk" style="background:${rankColor(rank, total)}">${rank ?? '–'}</div></div>`;
+
+  const strip = CATS.map(c => {
+    const rk = r.cats[c];
+    return `<div class="cat"><div class="cn">${c}</div>
+      <div class="cv" style="color:${rankColor(rk, total)}">${rk}</div></div>`;
+  }).join('');
+
+  // grouped roster
+  const groups = BUCKET_ORDER.map(b => {
+    const ps = t.players.filter(p => p._bucket === b).sort((a,b2) => b2._val - a._val);
+    if (!ps.length) return '';
+    const rows = ps.map(p => `
+      <div class="player">
+        <img class="hs" src="${esc(p.headshot||'')}" onerror="this.style.visibility='hidden'" alt="">
+        <div class="pinfo">
+          <div class="pname">${esc(p.name)}</div>
+          <div class="pmeta">${esc(p.nbaTeam||'FA')} · ${esc(p.pos)}${p.rookie?' · <span class="rook">R</span>':''}${p.age?' · '+p.age:''}</div>
+        </div>
+        <div class="pstats">${statLine(p)}</div>
+      </div>`).join('');
+    return `<div class="grp"><div class="grp-h">${b}<span class="ln"></span>${ps.length}</div>${rows}</div>`;
+  }).join('');
+
+  // picks
+  const picksHtml = (t.picks && t.picks.length)
+    ? `<div class="picks"><div class="ph">Draft Picks</div>` +
+      t.picks.map(y => {
+        const acq = y.detail && y.detail.some(d => d.from && d.from !== t.id);
+        return `<span class="pk${acq?' acq':''}"><b>${y.year}</b> · R${(y.rounds||[]).join(', ')}</span>`;
+      }).join('') + `</div>`
+    : '';
+
+  const posBadge = (lbl, rank) =>
+    `<div class="pr"><span class="pl">${lbl}</span><span class="pv" style="background:${rankColor(rank,total)}">${rank}</span></div>`;
+
+  return `
+  <div class="card" data-id="${t.id}">
+    <div class="card-head" onclick="toggleCard('${t.id}')">
+      <img class="logo" src="${esc(t.logo||'')}" onerror="this.style.visibility='hidden'" alt="">
+      <div class="team-meta">
+        <div class="team-name">${esc(t.name)}</div>
+        <div class="team-rec">${esc(recTxt)}</div>
+      </div>
+      <div class="chev">▼</div>
+    </div>
+    <div class="badges">
+      ${badge('Overall', r.overall)}
+      ${badge('Contender', r.contender)}
+      ${badge('Draft', r.draft)}
+    </div>
+    <div class="catstrip">${strip}</div>
+    <div class="roster">
+      <div class="posrank">
+        ${posBadge('Guards', r.pos.G)}
+        ${posBadge('Forwards', r.pos.F)}
+        ${posBadge('Centers', r.pos.C)}
+      </div>
+      ${groups}
+      ${picksHtml}
+    </div>
+  </div>`;
+}
+
+function render() {
+  const teams = [...DATA.teams];
+  const total = teams.length;
+  const key = SORT;
+  teams.sort((a, b) => {
+    if (key === 'name') return a.name.localeCompare(b.name);
+    if (key === 'standing') return (a.rank ?? 99) - (b.rank ?? 99);
+    return (a._rank[key] ?? 99) - (b._rank[key] ?? 99);
+  });
+  $('#app').innerHTML = `<div class="grid">${teams.map(t => renderCard(t, total)).join('')}</div>`;
+}
+
+window.toggleCard = (id) => {
+  const c = document.querySelector(`.card[data-id="${id}"]`);
+  if (c) c.classList.toggle('open');
+};
+
+function renderSortbar() {
+  const opts = [
+    ['overall','Overall'], ['contender','Contender'], ['draft','Draft Capital'],
+    ['standing','Standings'], ['name','A–Z'],
+  ];
+  $('#sortbar').innerHTML = opts.map(([k,l]) =>
+    `<span class="pill${SORT===k?' active':''}" onclick="setSort('${k}')">${l}</span>`).join('');
+}
+window.setSort = (k) => { SORT = k; renderSortbar(); render(); };
+
+// ---------- boot ----------
+function curLeague() {
+  return qparam('league') || LEAGUES[0].id;
+}
+function setupSwitch() {
+  const sel = $('#lgSwitch');
+  sel.innerHTML = LEAGUES.map(l => `<option value="${l.id}">${l.label}</option>`).join('');
+  sel.value = curLeague();
+  const found = LEAGUES.find(l => l.id === sel.value);
+  if (found) $('#subLabel').textContent = found.label;
+  sel.onchange = () => {
+    const u = new URL(location.href); u.searchParams.set('league', sel.value);
+    location.href = u.toString();
+  };
+}
+
+async function load() {
+  setupSwitch();
+  try {
+    const res = await fetch(`${API}?league=${encodeURIComponent(curLeague())}`);
+    const j = await res.json();
+    if (!res.ok || j.error) {
+      $('#app').innerHTML = `<div class="msg err">${esc(j.error || 'Failed to load league.')}</div>`;
+      return;
+    }
+    DATA = j;
+    computeRanks(DATA.teams);
+    renderSortbar();
+    render();
+    if (location.hash === '#openall') document.querySelectorAll('.card').forEach(c => c.classList.add('open'));
+  } catch (e) {
+    $('#app').innerHTML = `<div class="msg err">Network error: ${esc(e.message)}</div>`;
+  }
+}
+load();
+</script>
+</body>
+</html>
