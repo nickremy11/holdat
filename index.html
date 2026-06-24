@@ -91,6 +91,8 @@
   .team-meta { width: 210px; min-width: 130px; flex: 1 1 auto; }
   .team-name { font-weight: 800; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .team-rec { color: var(--ink3); font-size: 12px; font-weight: 600; margin-top: 2px; }
+  .team-val { font-size: 11px; font-weight: 700; color: var(--ink3); margin-top: 3px; letter-spacing: .3px; }
+  .team-val b { color: var(--teal); font-size: 13px; }
   .chev { color: var(--ink3); font-size: 13px; transition: transform .18s; flex: none; }
   .card.open .chev { transform: rotate(180deg); }
 
@@ -301,22 +303,27 @@ function rankFromScores(scoreMap, higherBetter = true) {
   return rank;
 }
 
-// value of a pick by its overall draft position — exponential decay (1.01 ≫ 1.14 ≫ 2.01 …)
-function pickValueByOverall(overall) { return 100 * Math.pow(0.93, Math.max(0, overall - 1)); }
+// Pick value by round + slot (1..14), linear within each round:
+//   R1: 150 → 60,  R2: 55 → 40,  R3: 30 → 0
+function pickValueSlot(round, slot, spr) {
+  const t = (spr > 1) ? (slot - 1) / (spr - 1) : 0; // 0 at pick .01, 1 at last pick
+  if (round === 1) return 150 - t * 90;
+  if (round === 2) return 55 - t * 15;
+  if (round === 3) return 30 - t * 30;
+  return 0; // no 4th round in this league
+}
 function draftValue(team) {
   const d = team.draft || {};
   const spr = DATA.slotsPerRound || team_count_fallback();
   let v = 0;
   // upcoming draft — exact slots
-  for (const p of (d.current || [])) v += pickValueByOverall(p.overall);
+  for (const p of (d.current || [])) v += pickValueSlot(p.round, p.slot, spr);
   // future years — no slot yet: estimate at mid-round, discount per year out
   for (const y of (d.future || [])) {
     const yearsOut = (d.currentYear != null) ? Math.max(1, y.year - d.currentYear) : 1;
     const disc = Math.pow(0.9, yearsOut);
-    for (const r of (y.rounds || [])) {
-      const estOverall = (r - 1) * spr + (spr + 1) / 2;
-      v += pickValueByOverall(estOverall) * disc;
-    }
+    const midSlot = (spr + 1) / 2;
+    for (const r of (y.rounds || [])) v += pickValueSlot(r, midSlot, spr) * disc;
   }
   return v;
 }
@@ -403,11 +410,19 @@ function computeRanks(teams) {
     catRank[c] = {}; vals.forEach((x,i) => catRank[c][x.id] = i + 1);
   }
 
-  // POSITIONAL group ranks (Guard / Forward / Center pools)
+  // POSITIONAL group ranks (Guard / Forward / Center) — ALL position-eligible players;
+  // a multi-eligible player counts in every group it qualifies for (intentional double count).
+  // Dynasty-value based (sum of positive BZ) when available; else 9-cat z-score.
   const posRank = {};
   [['G', isGuard], ['F', isFwd], ['C', isCtr]].forEach(([key, pred]) => {
-    const rows = teams.map(t => ({ team: t, cats: aggregate(t.players.filter(pred)) }));
-    posRank[key] = rankFromScores(zScore(rows));
+    if (BBM.loaded && BBM.count) {
+      const scores = new Map(teams.map(t =>
+        [t.id, t.players.filter(pred).reduce((s, p) => s + Math.max(0, p._bz || 0), 0)]));
+      posRank[key] = rankFromScores(scores);
+    } else {
+      const rows = teams.map(t => ({ team: t, cats: aggregate(t.players.filter(pred)) }));
+      posRank[key] = rankFromScores(zScore(rows));
+    }
   });
 
   teams.forEach(t => {
@@ -494,6 +509,8 @@ function renderCard(t, total) {
       <div class="team-meta">
         <div class="team-name">${esc(t.name)}</div>
         <div class="team-rec">${esc(recTxt)}</div>
+        ${(DATA._overallSource === 'bz' && t._bzSum != null)
+          ? `<div class="team-val">Value <b>${Math.round(t._bzSum).toLocaleString()}</b></div>` : ''}
       </div>
       <div class="badges">
         ${badge('Overall', r.overall)}

@@ -101,14 +101,20 @@ Configured in `index.html` (`LEAGUES` array):
 | 26-27 (active) | `mkuoaxbhmqrct7rf` |
 | 25-26 (history) | `zdmn1wu0md6fpz8d` |
 
-## Ranking model (v1)
+## Ranking model
 
-- **Overall** — z-score sum across all 9 categories using every rostered player's
-  per-game totals (counting cats summed, FG%/FT% averaged, TO inverted).
-- **Contender** — same z-score, but only each team's **top 10 players** (by per-player
-  z-value) — a win-now / starter-strength proxy.
-- **Draft** — weighted sum of owned future picks (R1=30, R2=15, R3=8, R4=4).
+- **Overall** — rank of each team's **dynasty-value total** (sum of BZ). Negative
+  handling: matched players sorted by value desc; the top 12 count as-is, the 13th+
+  only count if positive (negatives → 0). The total is shown on the card as "Value".
+  Falls back to a 9-cat z-score if BZ values are unavailable.
+- **Contender** — 9-cat z-score over each team's **top 10 players** (win-now proxy).
+- **Draft** — sum of pick values. For the upcoming draft (real slots), linear within
+  each round: **R1 150→60, R2 55→40, R3 30→0** across slots 1–14. Future-year picks
+  (no slot yet) are valued at the mid-slot with a 0.9^(years-out) discount.
 - **Per-category** — straight rank of each team's category total.
-- **Positional (G/F/C)** — z-score sum over each team's position-eligible players.
+- **Positional (G/F/C)** — rank of summed positive BZ over **all position-eligible**
+  players (a multi-eligible player counts in each group; intentional double count).
+  Falls back to a 9-cat z-score if BZ is unavailable.
 
-These are heuristics meant to be tuned later.
+BZ (Bazemore dynasty value) is never displayed per-player; only team **totals** and
+**ranks** are shown.
