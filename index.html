@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Holdat — Dynasty NBA</title>
+<link rel="icon" type="image/png" href="assets/hype.png" />
 <style>
   :root {
     --bg: #16181c;
@@ -50,14 +51,13 @@
     display: flex; align-items: center; justify-content: space-between;
     gap: 16px; flex-wrap: wrap; margin-bottom: 22px;
   }
-  .brand { display: flex; align-items: baseline; gap: 14px; }
-  .brand h1 {
-    font-size: 34px; font-weight: 900; letter-spacing: 2px;
-    background: linear-gradient(90deg, var(--orange), var(--gold));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    text-transform: uppercase;
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand .logo-img {
+    height: 60px; width: 60px; border-radius: 13px; object-fit: cover; display: block;
+    border: 1px solid var(--line);
+    box-shadow: 0 0 22px rgba(255,107,53,.28);
   }
-  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 600; letter-spacing: 1px; }
+  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 700; letter-spacing: 1px; }
   .controls { display: flex; gap: 10px; align-items: center; }
   select.lg-switch {
     background: var(--card); color: var(--ink); border: 1px solid var(--line);
@@ -72,29 +72,30 @@
   .pill:hover { color: var(--ink); border-color: #3a4150; }
   .pill.active { background: var(--orange); color: #1a1208; border-color: var(--orange); }
 
-  /* ---------- Cards ---------- */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+  /* ---------- Cards (full-width rows) ---------- */
+  .grid { display: flex; flex-direction: column; gap: 12px; }
   .card {
     background: linear-gradient(180deg, var(--card2), var(--card));
-    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
-    box-shadow: 0 8px 30px rgba(0,0,0,.35); transition: border-color .15s, transform .15s;
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 6px 22px rgba(0,0,0,.3); transition: border-color .15s;
   }
-  .card:hover { border-color: #3c4350; transform: translateY(-2px); }
+  .card:hover { border-color: #3c4350; }
   .card-head {
-    display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer;
-    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 20px; padding: 12px 18px; cursor: pointer;
   }
+  .card.open .card-head { border-bottom: 1px solid var(--line); }
   .logo {
     width: 44px; height: 44px; border-radius: 10px; object-fit: cover; flex: none;
     background: #11141a; border: 1px solid var(--line);
   }
-  .team-meta { flex: 1; min-width: 0; }
+  .team-meta { width: 210px; min-width: 130px; flex: 1 1 auto; }
   .team-name { font-weight: 800; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .team-rec { color: var(--ink3); font-size: 12px; font-weight: 600; margin-top: 2px; }
-  .chev { color: var(--ink3); font-size: 13px; transition: transform .18s; }
+  .chev { color: var(--ink3); font-size: 13px; transition: transform .18s; flex: none; }
   .card.open .chev { transform: rotate(180deg); }
 
-  .badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 14px 16px; }
+  /* rank badges + cat strip live inline in the row now */
+  .badges { display: flex; gap: 16px; flex: none; }
   .badge { text-align: center; }
   .badge .lbl { font-size: 10px; letter-spacing: 1px; color: var(--ink3); font-weight: 800; text-transform: uppercase; }
   .badge .rk {
@@ -104,20 +105,18 @@
     box-shadow: 0 0 14px rgba(0,0,0,.4);
   }
 
-  .catstrip {
-    display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; padding: 0 16px 14px;
-  }
+  .catstrip { display: flex; gap: 5px; flex: none; }
   .cat {
-    text-align: center; border-radius: 7px; padding: 5px 2px; background: var(--card);
+    width: 36px; text-align: center; border-radius: 7px; padding: 5px 2px; background: var(--card);
     border: 1px solid var(--line);
   }
   .cat .cn { font-size: 9px; color: var(--ink3); font-weight: 800; letter-spacing: .3px; }
   .cat .cv { font-size: 13px; font-weight: 900; margin-top: 1px; }
 
   /* ---------- Expanded roster ---------- */
-  .roster { display: none; padding: 4px 14px 16px; border-top: 1px solid var(--line); }
+  .roster { display: none; padding: 14px 18px 16px; }
   .card.open .roster { display: block; }
-  .posrank { display: flex; gap: 8px; margin: 12px 2px 14px; flex-wrap: wrap; }
+  .posrank { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
   .posrank .pr {
     display: flex; align-items: center; gap: 7px; background: var(--card);
     border: 1px solid var(--line); border-radius: 9px; padding: 6px 11px;
@@ -127,24 +126,27 @@
     width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center;
     justify-content: center; font-size: 12px; font-weight: 900; color: #0c0e12;
   }
-  .grp { margin-bottom: 12px; }
+  /* 5 position groups as columns */
+  .groups-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .grp { min-width: 0; }
   .grp-h {
     display: flex; align-items: center; gap: 8px; margin: 0 2px 6px;
     font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--orange); text-transform: uppercase;
   }
   .grp-h .ln { flex: 1; height: 1px; background: var(--line); }
   .player {
-    display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 9px;
-    padding: 6px 6px; border-radius: 8px;
+    display: grid; grid-template-columns: 24px 1fr; align-items: start; gap: 8px;
+    padding: 5px 5px; border-radius: 8px;
   }
   .player:hover { background: var(--card); }
-  .player img.hs { width: 26px; height: 26px; border-radius: 50%; background: #11141a; object-fit: cover; }
+  .player img.hs { width: 24px; height: 24px; border-radius: 50%; background: #11141a; object-fit: cover; margin-top: 1px; }
   .pinfo { min-width: 0; }
-  .pname { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pmeta { font-size: 10px; color: var(--ink3); font-weight: 600; }
+  .pname { font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pmeta { font-size: 9.5px; color: var(--ink3); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pmeta .rook { color: var(--teal); font-weight: 800; }
-  .pstats { font-size: 11px; color: var(--ink2); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pstats { font-size: 10.5px; color: var(--ink2); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.35; margin-top: 2px; }
   .pstats b { color: var(--ink); }
+  .empty-grp { color: var(--ink3); font-size: 12px; padding: 6px 5px; }
 
   .picks { margin-top: 4px; padding: 10px 2px 2px; border-top: 1px dashed var(--line); }
   .picks .ph { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--gold); text-transform: uppercase; margin-bottom: 6px; }
@@ -157,6 +159,17 @@
   .spin { display: inline-block; width: 20px; height: 20px; border: 3px solid var(--line); border-top-color: var(--orange); border-radius: 50%; animation: sp 1s linear infinite; vertical-align: middle; margin-right: 10px; }
   @keyframes sp { to { transform: rotate(360deg); } }
   a { color: var(--teal); }
+
+  /* narrower screens: let the row wrap and collapse the 5 columns */
+  @media (max-width: 1100px) {
+    .card-head { flex-wrap: wrap; gap: 14px; }
+    .team-meta { flex-basis: 100%; width: auto; }
+    .groups-cols { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 720px) {
+    .catstrip { flex-wrap: wrap; }
+    .groups-cols { grid-template-columns: repeat(2, 1fr); }
+  }
 </style>
 </head>
 <body>
@@ -180,7 +193,7 @@
   <div class="wrap">
     <header class="top">
       <div class="brand">
-        <h1>Holdat</h1>
+        <img class="logo-img" src="assets/hype.png" alt="Holdat — The Dynasty Begins">
         <span class="sub" id="subLabel">Dynasty NBA</span>
       </div>
       <div class="controls">
@@ -365,19 +378,18 @@ function renderCard(t, total) {
       <div class="cv" style="color:${rankColor(rk, total)}">${rk}</div></div>`;
   }).join('');
 
-  // grouped roster
+  // grouped roster — always render all 5 columns (G / G/F / F / F/C / C)
   const groups = BUCKET_ORDER.map(b => {
     const ps = t.players.filter(p => p._bucket === b).sort((a,b2) => b2._val - a._val);
-    if (!ps.length) return '';
-    const rows = ps.map(p => `
+    const rows = ps.length ? ps.map(p => `
       <div class="player">
         <img class="hs" src="${esc(p.headshot||'')}" onerror="this.style.visibility='hidden'" alt="">
         <div class="pinfo">
           <div class="pname">${esc(p.name)}</div>
           <div class="pmeta">${esc(p.nbaTeam||'FA')} · ${esc(p.pos)}${p.rookie?' · <span class="rook">R</span>':''}${p.age?' · '+p.age:''}</div>
+          <div class="pstats">${statLine(p)}</div>
         </div>
-        <div class="pstats">${statLine(p)}</div>
-      </div>`).join('');
+      </div>`).join('') : `<div class="empty-grp">—</div>`;
     return `<div class="grp"><div class="grp-h">${b}<span class="ln"></span>${ps.length}</div>${rows}</div>`;
   }).join('');
 
@@ -401,21 +413,21 @@ function renderCard(t, total) {
         <div class="team-name">${esc(t.name)}</div>
         <div class="team-rec">${esc(recTxt)}</div>
       </div>
+      <div class="badges">
+        ${badge('Overall', r.overall)}
+        ${badge('Contender', r.contender)}
+        ${badge('Draft', r.draft)}
+      </div>
+      <div class="catstrip">${strip}</div>
       <div class="chev">▼</div>
     </div>
-    <div class="badges">
-      ${badge('Overall', r.overall)}
-      ${badge('Contender', r.contender)}
-      ${badge('Draft', r.draft)}
-    </div>
-    <div class="catstrip">${strip}</div>
     <div class="roster">
       <div class="posrank">
         ${posBadge('Guards', r.pos.G)}
         ${posBadge('Forwards', r.pos.F)}
         ${posBadge('Centers', r.pos.C)}
       </div>
-      ${groups}
+      <div class="groups-cols">${groups}</div>
       ${picksHtml}
     </div>
   </div>`;
