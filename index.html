@@ -273,14 +273,26 @@ function rankFromScores(scoreMap, higherBetter = true) {
   return rank;
 }
 
-const PICK_W = { 1: 30, 2: 15, 3: 8, 4: 4 };
+// value of a pick by its overall draft position — exponential decay (1.01 ≫ 1.14 ≫ 2.01 …)
+function pickValueByOverall(overall) { return 100 * Math.pow(0.93, Math.max(0, overall - 1)); }
 function draftValue(team) {
+  const d = team.draft || {};
+  const spr = DATA.slotsPerRound || team_count_fallback();
   let v = 0;
-  for (const y of (team.picks || [])) {
-    for (const r of (y.rounds || [])) v += PICK_W[r] || 2;
+  // upcoming draft — exact slots
+  for (const p of (d.current || [])) v += pickValueByOverall(p.overall);
+  // future years — no slot yet: estimate at mid-round, discount per year out
+  for (const y of (d.future || [])) {
+    const yearsOut = (d.currentYear != null) ? Math.max(1, y.year - d.currentYear) : 1;
+    const disc = Math.pow(0.9, yearsOut);
+    for (const r of (y.rounds || [])) {
+      const estOverall = (r - 1) * spr + (spr + 1) / 2;
+      v += pickValueByOverall(estOverall) * disc;
+    }
   }
   return v;
 }
+function team_count_fallback() { return (DATA && DATA.teams && DATA.teams.length) || 14; }
 
 // ---------- position bucketing ----------
 function posBucket(posStr) {
@@ -398,18 +410,29 @@ function renderCard(t, total) {
     return `<div class="grp"><div class="grp-h">${b}<span class="ln"></span>${ps.length}</div>${rows}</div>`;
   }).join('');
 
-  // picks — rendered as the 6th column in the roster grid
-  const totalPicks = (t.picks || []).reduce((n, y) => n + (y.rounds || []).length, 0);
-  const picksRows = (t.picks && t.picks.length)
-    ? t.picks.map(y => {
-        const detail = (y.detail && y.detail.length) ? y.detail : (y.rounds || []).map(r => ({ round: r, from: t.id }));
-        const chips = detail.map(d => {
-          const acq = d.from && d.from !== t.id;
-          return `<span class="pk${acq ? ' acq' : ''}" title="${acq ? 'Acquired' : 'Own'} round ${d.round}">${d.round}</span>`;
-        }).join('');
-        return `<div class="pk-year"><span class="pk-yr">${y.year}</span><span class="pk-rounds">${chips}</span></div>`;
-      }).join('')
-    : `<div class="empty-grp">—</div>`;
+  // picks — rendered as the 6th column. Upcoming draft shows real slots (1.05);
+  // future years (no slot assigned yet) show round-only (R1).
+  const d = t.draft || { current: [], future: [] };
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const curCount = (d.current || []).length;
+  const futCount = (d.future || []).reduce((n, y) => n + (y.rounds || []).length, 0);
+  const totalPicks = curCount + futCount;
+
+  let picksRows = '';
+  if (curCount) {
+    const chips = d.current.map(p => {
+      const lbl = `${p.round}.${pad2(p.slot)}`;
+      return `<span class="pk${p.acquired ? ' acq' : ''}" title="${p.acquired ? 'Acquired' : 'Own'} pick ${lbl}">${lbl}</span>`;
+    }).join('');
+    picksRows += `<div class="pk-year"><span class="pk-yr">${d.currentYear || ''}</span><span class="pk-rounds">${chips}</span></div>`;
+  }
+  (d.future || []).forEach(y => {
+    const acq = new Set(y.acquiredRounds || []);
+    const chips = (y.rounds || []).map(r => `<span class="pk${acq.has(r) ? ' acq' : ''}">R${r}</span>`).join('');
+    picksRows += `<div class="pk-year"><span class="pk-yr">${y.year}</span><span class="pk-rounds">${chips}</span></div>`;
+  });
+  if (!totalPicks) picksRows = `<div class="empty-grp">—</div>`;
+
   const picksColumn = `<div class="grp pick-col">
       <div class="grp-h">Picks<span class="ln"></span>${totalPicks}</div>${picksRows}</div>`;
 

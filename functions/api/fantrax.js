@@ -153,9 +153,10 @@ export async function onRequestGet(context) {
     }
 
     // type === 'all' — assemble everything
-    const [teamsData, standingsData] = await Promise.all([
+    const [teamsData, standingsData, draftData] = await Promise.all([
       fxReq('getFantasyTeams', { leagueId: league }, cookie),
       fxReq('getStandings', { leagueId: league }, cookie),
+      fxReq('getDraftResults', { leagueId: league }, cookie).catch(() => null),
     ]);
 
     const teams = (teamsData.fantasyTeams || []).map((t) => ({
@@ -191,19 +192,63 @@ export async function onRequestGet(context) {
       teams.map((t) => fxReq('getTeamRosterInfo', { leagueId: league, teamId: t.id }, cookie))
     );
 
+    const rosterPicksByTeam = {};
     teams.forEach((t, i) => {
       const parsed = parseRoster(rosters[i]);
       t.players = parsed.players;
-      t.picks = parsed.picks;
+      rosterPicksByTeam[t.id] = parsed.picks; // year-based, no slots — used for future years
       const s = standMap[t.id] || {};
       t.rank = s.rank ?? null;
       t.record = { w: s.w, l: s.l, t: s.t, winPct: s.winPct, ptsF: s.ptsF, ptsA: s.ptsA };
+    });
+
+    // --- Draft: real slots for the upcoming draft (getDraftResults), round-only for future years ---
+    const order = (draftData && draftData.fantasyTeamsOrdered) || [];
+    const slotsPerRound = order.length || teams.length || 0;
+    // slot (1-based draft order) -> the team that ORIGINALLY owns that slot
+    const slotOriginalOwner = {};
+    order.forEach((t, i) => { slotOriginalOwner[i + 1] = t.id; });
+
+    // current draft year = earliest year present in the roster pick data
+    let currentYear = null;
+    Object.values(rosterPicksByTeam).forEach((arr) => {
+      (arr || []).forEach((y) => { if (currentYear == null || y.year < currentYear) currentYear = y.year; });
+    });
+
+    // current-draft picks (with slots) grouped by current owner
+    const currentByTeam = {};
+    if (draftData && Array.isArray(draftData.draftPicksOrdered)) {
+      for (const p of draftData.draftPicksOrdered) {
+        const orig = slotOriginalOwner[p.pickNumber];
+        (currentByTeam[p.teamId] = currentByTeam[p.teamId] || []).push({
+          round: p.round,
+          slot: p.pickNumber,
+          overall: slotsPerRound ? (p.round - 1) * slotsPerRound + p.pickNumber : p.pickNumber,
+          acquired: !!(orig && orig !== p.teamId),
+        });
+      }
+    }
+    Object.values(currentByTeam).forEach((a) => a.sort((x, y) => x.round - y.round || x.slot - y.slot));
+
+    teams.forEach((t) => {
+      const current = currentByTeam[t.id] || [];
+      // future-year picks (no slots yet): everything in roster data beyond the current draft year
+      const future = (rosterPicksByTeam[t.id] || [])
+        .filter((y) => currentYear == null || y.year > currentYear)
+        .map((y) => ({
+          year: y.year,
+          rounds: y.rounds || [],
+          acquiredRounds: (y.detail || []).filter((d) => d.from && d.from !== t.id).map((d) => d.round),
+        }));
+      t.draft = { currentYear, current, future };
     });
 
     return json({
       league,
       categories: CATS,
       lowerBetter: [...LOWER_BETTER],
+      slotsPerRound,
+      draftCurrentYear: currentYear,
       teams,
       fetchedAt: Date.now(),
     });
