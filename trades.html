@@ -77,6 +77,16 @@
 
   /* ---------- Trade history ---------- */
   .trades-list { display: flex; flex-direction: column; gap: 14px; }
+  .year-divider {
+    display: flex; align-items: center; gap: 14px; margin: 22px 0 4px; user-select: none;
+  }
+  .year-divider:first-child { margin-top: 0; }
+  .year-divider .yr {
+    font-size: 22px; font-weight: 900; letter-spacing: 1px;
+    background: linear-gradient(90deg, var(--orange), var(--gold));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .year-divider .ln { flex: 1; height: 1px; background: var(--line); }
   .trade-card {
     background: linear-gradient(180deg, var(--card2), var(--card));
     border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
@@ -137,10 +147,10 @@
     <header class="top">
       <div class="brand">
         <img class="logo-img" src="assets/hype.png" alt="Holdat — The Dynasty Begins">
-        <span class="sub" id="subLabel">Dynasty NBA</span>
+        <span class="sub" id="subLabel">All-Time Trade History</span>
       </div>
       <div class="controls">
-        <select class="lg-switch" id="lgSwitch"></select>
+        <select class="lg-switch" id="teamFilter"><option value="">All Teams</option></select>
       </div>
     </header>
 
@@ -154,11 +164,18 @@
 
 <script src="shared.js"></script>
 <script>
-let DATA_TEAMS = []; // {id, name, logo} — for team lookup in trade cards
+let ALL_TEAMS = {}; // teamId -> {name, logo} — merged across all leagues (IDs are unique per league)
+let ALL_TRADES = []; // merged across all leagues, sorted newest-first, each tagged with _dt/_year
+let TEAM_FILTER = '';
 
 function teamLookup(id) {
-  const t = DATA_TEAMS.find(x => x.id === id);
-  return t ? { name: t.name, logo: t.logo } : null;
+  return ALL_TEAMS[id] || null;
+}
+// Fantrax date strings ("Thu Jul 9, 2026, 5:14PM") need a space before AM/PM for
+// the Date constructor to parse them at all.
+function parseTradeDate(s) {
+  const d = new Date(String(s || '').replace(/(\d)(AM|PM)/i, '$1 $2'));
+  return isNaN(d.getTime()) ? null : d;
 }
 function pickLabel(a) {
   const ord = a.round === 1 ? '1st' : a.round === 2 ? '2nd' : a.round === 3 ? '3rd' : `${a.round}th`;
@@ -203,33 +220,88 @@ function renderTradeCard(trade) {
 }
 function renderTrades(list) {
   if (!list.length) {
-    $('#app').innerHTML = `<div class="msg">No trades have been made in this league yet.</div>`;
+    $('#app').innerHTML = `<div class="msg">${TEAM_FILTER ? 'No trades found for that team.' : 'No trades have been made yet.'}</div>`;
     return;
   }
-  $('#app').innerHTML = `<div class="trades-list">${list.map(renderTradeCard).join('')}</div>`;
+  let html = '', lastYear = null;
+  for (const t of list) {
+    if (t._year !== lastYear) {
+      html += `<div class="year-divider"><span class="yr">${t._year || '—'}</span><span class="ln"></span></div>`;
+      lastYear = t._year;
+    }
+    html += renderTradeCard(t);
+  }
+  $('#app').innerHTML = `<div class="trades-list">${html}</div>`;
+}
+
+function applyFilterAndRender() {
+  const list = TEAM_FILTER
+    ? ALL_TRADES.filter(t => Object.values(t.teamNames).includes(TEAM_FILTER))
+    : ALL_TRADES;
+  renderTrades(list);
+}
+
+function populateTeamFilter() {
+  const names = new Set();
+  for (const t of ALL_TRADES) for (const n of Object.values(t.teamNames)) names.add(n);
+  const sorted = [...names].sort((a, b) => a.localeCompare(b));
+  const sel = $('#teamFilter');
+  sel.innerHTML = `<option value="">All Teams</option>` +
+    sorted.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  // deep-linkable: /trades?team=Big%20Brother%20Energy pre-selects the filter
+  const wanted = qparam('team');
+  if (wanted && sorted.includes(wanted)) { TEAM_FILTER = wanted; sel.value = wanted; }
+  sel.onchange = () => {
+    TEAM_FILTER = sel.value;
+    const u = new URL(location.href);
+    if (TEAM_FILTER) u.searchParams.set('team', TEAM_FILTER); else u.searchParams.delete('team');
+    history.replaceState(null, '', u);
+    applyFilterAndRender();
+  };
 }
 
 async function load() {
-  setupLeagueSwitcher();
   const rl = $('#rostersLink');
-  if (rl) rl.href = `/?league=${encodeURIComponent(curLeague())}`;
+  if (rl) rl.href = `/?league=${encodeURIComponent(LEAGUES[0].id)}`;
 
-  const league = curLeague();
   try {
-    // team names/logos for the "Receives" headers — cheap dedicated call, no roster/BZ work
-    const teamsRes = await fetch(`${API}?league=${encodeURIComponent(league)}&type=teams`);
-    const teamsJson = await teamsRes.json();
-    if (teamsRes.ok && teamsJson.fantasyTeams) {
-      DATA_TEAMS = teamsJson.fantasyTeams.map(t => ({ id: t.id, name: t.name, logo: t.logoUrl128 || t.logoUrl256 || null }));
+    const results = await Promise.all(LEAGUES.map(async (lg) => {
+      const [teamsRes, tradesRes] = await Promise.all([
+        fetch(`${API}?league=${encodeURIComponent(lg.id)}&type=teams`),
+        fetch(`${API}?league=${encodeURIComponent(lg.id)}&type=trades`),
+      ]);
+      const teamsJson = await teamsRes.json();
+      const tradesJson = await tradesRes.json();
+      return { lg, teamsJson, tradesJson };
+    }));
+
+    let anyOk = false;
+    for (const { teamsJson, tradesJson } of results) {
+      if (teamsJson && teamsJson.fantasyTeams) {
+        for (const t of teamsJson.fantasyTeams) {
+          ALL_TEAMS[t.id] = { name: t.name, logo: t.logoUrl128 || t.logoUrl256 || null };
+        }
+      }
+      if (tradesJson && !tradesJson.error && Array.isArray(tradesJson.trades)) {
+        anyOk = true;
+        for (const t of tradesJson.trades) {
+          const dt = parseTradeDate(t.date);
+          t._dt = dt;
+          t._year = dt ? dt.getFullYear() : null;
+          ALL_TRADES.push(t);
+        }
+      }
     }
 
-    const res = await fetch(`${API}?league=${encodeURIComponent(league)}&type=trades`);
-    const j = await res.json();
-    if (!res.ok || j.error) {
-      $('#app').innerHTML = `<div class="msg err">${esc(j.error || 'Failed to load trade history.')}</div>`;
+    if (!anyOk) {
+      const firstErr = results.map(r => r.tradesJson && r.tradesJson.error).find(Boolean);
+      $('#app').innerHTML = `<div class="msg err">${esc(firstErr || 'Failed to load trade history.')}</div>`;
       return;
     }
-    renderTrades(j.trades || []);
+
+    ALL_TRADES.sort((a, b) => (b._dt ? b._dt.getTime() : 0) - (a._dt ? a._dt.getTime() : 0));
+    populateTeamFilter();
+    applyFilterAndRender();
   } catch (e) {
     $('#app').innerHTML = `<div class="msg err">Network error: ${esc(e.message)}</div>`;
   }
