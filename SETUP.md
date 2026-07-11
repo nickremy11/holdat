@@ -1,22 +1,35 @@
 # Holdat — Dynasty NBA viewer
 
-A single static page + one Cloudflare Pages Function that reads a Fantrax dynasty
-NBA league and renders every team as a card with **Overall / Contender / Draft**
-ranks, a 9-category strip, and an expandable roster grouped by **G / G/F / F / F/C / C**.
+A multi-page static site + Cloudflare Pages Functions that read a Fantrax dynasty
+NBA league. Two pages, linked via the top nav: **`/`** (every team as a card with
+Overall / Contender / Draft ranks, a 9-category strip, and an expandable roster
+grouped by G / G/F / F / F/C / C) and **`/trades`** (every executed trade, grouped
+by side, with full player + draft-pick returns). A **`/history`** page (league
+history — champions, standings-by-season, etc.) is planned next.
 
-Hosted at **holdat.ffhistorian.com** (Cloudflare Pages). No build step.
+Hosted at **holdat.ffhistorian.com** (Cloudflare Pages). No build step — Cloudflare
+Pages serves `foo.html` for a request to `/foo` automatically (same "clean URL"
+behavior used by the sibling `sleeper-helper` project's `/analyzer`).
 
 ## Layout
 
 ```
 holdat/
-├── index.html                 # the whole page (HTML + CSS + JS, no framework)
+├── index.html                 # Rosters page ("/") — HTML + CSS + JS, no framework
+├── trades.html                # Trade History page ("/trades") — same style, self-contained
+├── shared.js                  # LEAGUES list, esc/displayPos/curLeague, league-switcher — used by both pages
 ├── functions/api/fantrax.js   # Pages Function — proxies Fantrax fxpa with stored cookie
 ├── functions/api/bbm.js       # Pages Function — scrapes Basketball Monster "BZ" (Bazemore) values
 ├── wrangler.toml              # Pages config (pages_build_output_dir = ".")
 ├── .dev.vars                  # local-only cookies, FANTRAX_COOKIE + BBM_COOKIE (gitignored)
 └── SETUP.md
 ```
+
+Each page is self-contained (own `<style>` block, own load()) but shares `shared.js`
+for the league list and small helpers, so adding a season only means editing one
+`LEAGUES` array. When adding a new page (e.g. future `/history`), follow the same
+pattern: copy the shared shell (blacktop background, header, pagebar CSS) from
+`trades.html`, include `shared.js`, and add a nav link + `active` page-tab.
 
 ## Secrets
 
@@ -55,7 +68,26 @@ endpoint, which requires a **logged-in session cookie**. The cookie is stored as
 Pages secret (`FANTRAX_COOKIE`) and only ever lives server-side in the Function —
 it is never sent to the browser.
 
-Methods used: `getFantasyTeams`, `getStandings`, `getTeamRosterInfo` (per team).
+Methods used: `getFantasyTeams`, `getStandings`, `getTeamRosterInfo` (per team),
+`getDraftResults` (draft slots), `getTransactionDetailsHistory` (trade history —
+`?type=trades`, fetched only by `/trades`, not by the Rosters page).
+
+### Trade History resolves "who was drafted" for traded picks
+
+Each dynasty season is its **own Fantrax league ID** (see Leagues below), and a
+traded pick's year identifies which league ran that draft — `YEAR_TO_LEAGUE` in
+`functions/api/fantrax.js` maps them (extend this when a new season's league is
+added). `resolveDraftedPicks()` fetches that league's `getDraftResults` and looks
+up the pick two ways:
+- **Slot already known at trade time** ("Pick 5") — matched directly against that
+  draft's `draftPicksOrdered`.
+- **Slot not yet known** — Fantrax instead shows the *original owner's team name*
+  in parens (e.g. `"Round 2 (KC Voyagers)"`); that team's slot is found via the
+  target draft's `fantasyTeamsOrdered`, with a substring fallback for teams that
+  renamed between seasons.
+
+Only resolves once the draft has actually happened (a `scorerId` exists on that
+slot) — future picks correctly show no drafted player yet.
 
 ### The cookie expires
 
@@ -94,12 +126,14 @@ Cloudflare dashboard (Pages → holdat → Custom domains).
 
 ## Leagues
 
-Configured in `index.html` (`LEAGUES` array):
+Configured in `shared.js` (`LEAGUES` array — shared by both pages):
 
 | Season | League ID |
 |--------|-----------|
 | 26-27 (active) | `mkuoaxbhmqrct7rf` |
 | 25-26 (history) | `zdmn1wu0md6fpz8d` |
+| 24-25 (history) | `uxe3kqislwu07xfm` |
+| 23-24 (history) | `qybhh93dlge64jyi` |
 
 ## Ranking model
 

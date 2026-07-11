@@ -1,0 +1,35 @@
+// Shared across index.html / trades.html (no build step — plain <script> include).
+const API = '/api/fantrax';
+const LEAGUES = [
+  { id: 'mkuoaxbhmqrct7rf', label: '26-27 Dynasty' },
+  { id: 'zdmn1wu0md6fpz8d', label: '25-26 (History)' },
+  { id: 'uxe3kqislwu07xfm', label: '24-25 (History)' },
+  { id: 'qybhh93dlge64jyi', label: '23-24 (History)' },
+];
+
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const qparam = (k) => new URLSearchParams(location.search).get(k);
+// display-only: drop the generic G/F slots (implied by PG/SG/SF/PF); keep PG,SG,SF,PF,C
+const displayPos = (pos) => String(pos || '').split(',').map(s => s.trim())
+  .filter(p => p && p !== 'G' && p !== 'F').join(',');
+
+function curLeague() {
+  return qparam('league') || LEAGUES[0].id;
+}
+
+// Populates #lgSwitch + #subLabel and wires navigation that preserves the current
+// page path (so switching leagues on /trades stays on /trades).
+function setupLeagueSwitcher() {
+  const sel = $('#lgSwitch');
+  if (!sel) return;
+  sel.innerHTML = LEAGUES.map(l => `<option value="${l.id}">${l.label}</option>`).join('');
+  sel.value = curLeague();
+  const found = LEAGUES.find(l => l.id === sel.value);
+  const sub = $('#subLabel');
+  if (found && sub) sub.textContent = found.label;
+  sel.onchange = () => {
+    const u = new URL(location.href); u.searchParams.set('league', sel.value);
+    location.href = u.toString();
+  };
+}

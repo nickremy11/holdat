@@ -8,6 +8,7 @@
 // Routes (all GET):
 //   /api/fantrax?league={id}              -> { league, categories, teams:[...] }  (everything)
 //   /api/fantrax?league={id}&type=teams   -> raw getFantasyTeams
+//   /api/fantrax?league={id}&type=trades  -> { league, trades:[...] }  (executed trade history)
 //   /api/fantrax?league={id}&type=raw&method={m} -> raw passthrough (debug)
 
 const FX_URL = 'https://www.fantrax.com/fxpa/req';
@@ -127,6 +128,143 @@ function parseRoster(data) {
   return out;
 }
 
+// Parse getTransactionDetailsHistory rows into { id, date, week, teams:[id,...], legs:[...] }.
+// Each source row = one asset moving from one team to another; rows sharing a
+// txSetId belong to the same trade. Assets are either a player (row.scorer) or a
+// draft pick (row.draftPickDisplayParts — HTML-ish "Round <b>1</b> Pick <b>1</b>" /
+// "<b>2026</b> Draft Pick", parsed with regex since Fantrax doesn't give it structured here).
+function parsePickLabel(dp) {
+  const strip = (s) => stripTags(s || '');
+  const roundInfo = strip(dp.roundInfo);
+  const year = (strip(dp.year).match(/\d{4}/) || [])[0] || null;
+  const round = (roundInfo.match(/Round\s*(\d+)/i) || [])[1];
+  const pick = (roundInfo.match(/Pick\s*(\d+)/i) || [])[1];
+  // When the slot isn't determined yet, Fantrax shows the original-owner team name
+  // in parens instead of a pick number, e.g. "Round 2 (KC Voyagers)" — this is what
+  // lets us resolve who was drafted once that team's slot is known (see resolveDraftedPicks).
+  const origTeamName = pick ? null : (roundInfo.match(/\(([^)]+)\)/) || [])[1] || null;
+  return {
+    year: year ? parseInt(year, 10) : null,
+    round: round ? parseInt(round, 10) : null,
+    pick: pick ? parseInt(pick, 10) : null,
+    origTeamName,
+  };
+}
+
+// A traded pick's YEAR uniquely identifies which league ran that draft — each
+// dynasty "season" is its own Fantrax league ID, and its own upcoming/most-recent
+// rookie draft is labeled by the calendar year it happens in (e.g. the 26-27 league's
+// draft is "2026"). Confirmed empirically: 24-25 league's draft picks are dated 2024,
+// 25-26 league's are dated 2025, etc. Extend this map when a new season league is added.
+const YEAR_TO_LEAGUE = {
+  2023: 'qybhh93dlge64jyi', // 23-24 season league — 22-round startup draft
+  2024: 'uxe3kqislwu07xfm', // 24-25 season league
+  2025: 'zdmn1wu0md6fpz8d', // 25-26 season league
+  2026: 'mkuoaxbhmqrct7rf', // 26-27 season league
+};
+
+// Mutates trades' pick assets in place, attaching `.drafted = {name, pos, nbaTeam, headshot}`
+// wherever we can resolve who was actually selected with that pick. Two cases:
+//   A) the trade already shows an explicit slot ("Pick N") — the slot number Fantrax
+//      uses is stable, so it maps directly onto that draft-year league's results.
+//   B) the trade shows the ORIGINAL OWNER's name in parens (slot undetermined at trade
+//      time) — find that team's slot via the target league's own draft-order list, then
+//      look up that (round, slot) the same way.
+// Picks whose draft hasn't happened yet (no scorerId on that slot) are left unresolved.
+async function resolveDraftedPicks(trades, cookie) {
+  const neededYears = new Set();
+  for (const t of trades) for (const leg of t.legs) {
+    const a = leg.asset;
+    if (a.kind === 'pick' && a.year != null && YEAR_TO_LEAGUE[a.year]) neededYears.add(a.year);
+  }
+  if (!neededYears.size) return;
+
+  const draftByLeague = {};
+  await Promise.all([...neededYears].map(async (year) => {
+    const lgId = YEAR_TO_LEAGUE[year];
+    try {
+      const dr = await fxReq('getDraftResults', { leagueId: lgId }, cookie);
+      const order = (dr && dr.fantasyTeamsOrdered) || [];
+      const slotByTeamName = {};
+      order.forEach((t, i) => { slotByTeamName[t.name.trim().toLowerCase()] = i + 1; });
+      const pickKeyToScorer = {};
+      for (const p of (dr && dr.draftPicksOrdered) || []) {
+        if (p.scorerId) pickKeyToScorer[`${p.round}-${p.pickNumber}`] = p.scorerId;
+      }
+      const scorerById = {};
+      for (const s of (dr && dr.scorers) || []) scorerById[s.scorerId] = s;
+      draftByLeague[year] = { slotByTeamName, pickKeyToScorer, scorerById };
+    } catch (e) { /* leave this year's picks unresolved */ }
+  }));
+
+  for (const t of trades) for (const leg of t.legs) {
+    const a = leg.asset;
+    if (a.kind !== 'pick' || a.round == null) continue;
+    const dl = draftByLeague[a.year];
+    if (!dl) continue;
+    let slot = a.pick;
+    if (slot == null && a.origTeamName) {
+      const key = a.origTeamName.trim().toLowerCase();
+      slot = dl.slotByTeamName[key] ?? null;
+      // Teams sometimes rename between seasons (e.g. "KC Voyagers" -> "Voyagers").
+      // Fall back to a substring match, but only when it's unambiguous.
+      if (slot == null) {
+        const hits = Object.keys(dl.slotByTeamName).filter((n) => n.includes(key) || key.includes(n));
+        if (hits.length === 1) slot = dl.slotByTeamName[hits[0]];
+      }
+    }
+    if (slot == null) continue;
+    const scorerId = dl.pickKeyToScorer[`${a.round}-${slot}`];
+    const sc = scorerId && dl.scorerById[scorerId];
+    if (sc && sc.name) {
+      a.drafted = { name: sc.name, pos: sc.posShortNames || '', nbaTeam: sc.teamShortName || null, headshot: sc.headshotUrl || null };
+    }
+  }
+}
+
+function parseTrades(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    if (!row.txSetId) continue;
+    (groups.get(row.txSetId) || groups.set(row.txSetId, []).get(row.txSetId)).push(row);
+  }
+
+  const trades = [];
+  for (const [txSetId, grp] of groups) {
+    let date = null, week = null;
+    const teamIds = new Set();
+    const teamNames = {};
+    const legs = [];
+    for (const row of grp) {
+      const cells = {};
+      for (const c of row.cells || []) cells[c.key] = c;
+      if (cells.date && cells.date.content) date = cells.date.content;
+      if (cells.week && cells.week.content != null) week = cells.week.content;
+      const fromId = cells.from && cells.from.teamId, toId = cells.to && cells.to.teamId;
+      if (fromId) { teamIds.add(fromId); teamNames[fromId] = cells.from.content; }
+      if (toId) { teamIds.add(toId); teamNames[toId] = cells.to.content; }
+
+      const sc = row.scorer;
+      let asset = null;
+      if (sc && sc.name) {
+        asset = {
+          kind: 'player', name: sc.name, pos: sc.posShortNames || '',
+          nbaTeam: sc.teamShortName || null, headshot: sc.headshotUrl || null,
+        };
+      } else if (row.draftPickDisplayParts) {
+        const p = parsePickLabel(row.draftPickDisplayParts);
+        asset = { kind: 'pick', year: p.year, round: p.round, pick: p.pick, origTeamName: p.origTeamName };
+      }
+      if (asset && fromId && toId) legs.push({ fromId, toId, asset });
+    }
+    if (!legs.length) continue;
+    trades.push({ id: txSetId, date, week, teamIds: [...teamIds], teamNames, legs });
+  }
+  // newest first (date strings are "Mon DD, YYYY, H:MMAM/PM" — sort by original row order instead,
+  // which getTransactionDetailsHistory already returns newest-first)
+  return trades;
+}
+
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -145,6 +283,23 @@ export async function onRequestGet(context) {
       if (team) data.teamId = team;
       const out = await fxReq(method, data, cookie);
       return json(out);
+    }
+
+    if (type === 'trades') {
+      const rows = [];
+      let page = 1, totalPages = 1;
+      do {
+        const out = await fxReq('getTransactionDetailsHistory', {
+          leagueId: league, view: 'TRADE', pageNumber: page, maxResultsPerPage: 100,
+        }, cookie);
+        const tbl = out && out.table;
+        rows.push(...((tbl && tbl.rows) || []));
+        totalPages = (out && out.paginatedResultSet && out.paginatedResultSet.totalNumPages) || 1;
+        page += 1;
+      } while (page <= totalPages && page <= 10); // safety cap
+      const trades = parseTrades(rows);
+      await resolveDraftedPicks(trades, cookie);
+      return json({ league, trades, fetchedAt: Date.now() });
     }
 
     if (type === 'teams') {

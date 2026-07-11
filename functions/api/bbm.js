@@ -14,10 +14,6 @@
 const BBM_URL = 'https://basketballmonster.com/playerrankings.aspx';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0 Safari/537.36';
 
-// Column indexes in each player <tr> (see the rankings table layout):
-//   7 = BZ (Bazemore value, e.g. "236.01#1"), 10 = Name, 11 = Team
-const COL_BZ = 7, COL_NAME = 10, COL_TEAM = 11;
-
 const CACHE_SECONDS = 6 * 3600;
 
 function json(body, status = 200, extraHeaders = {}) {
@@ -56,10 +52,36 @@ export function normName(s) {
     .replace(/[^a-z0-9]/g, '');                            // keep alnum only
 }
 
+// Locate the Name/Team/BZ column indexes from the table's <th> header row, by
+// header text rather than a hardcoded position. Nick's saved BBM display columns
+// can change (a column added/removed shifts every index after it), which once
+// silently broke a hardcoded-index parser — this survives that.
+function findHeaderIndices(html) {
+  const segments = html.split(/<tr[\s>]/i);
+  for (const seg of segments) {
+    if (!/<th[\s>]/i.test(seg)) continue;
+    const end = seg.indexOf('</tr>');
+    const rowHtml = end >= 0 ? seg.slice(0, end) : seg;
+    const cells = [];
+    const re = /<th[^>]*>([\s\S]*?)<\/th>/g;
+    let m;
+    while ((m = re.exec(rowHtml)) !== null) cells.push(cellText(m[1]));
+    if (cells.length < 5) continue; // skip unrelated small header rows elsewhere on the page
+    const idx = (label) => cells.findIndex((c) => c === label);
+    const name = idx('Name'), team = idx('Team'), bz = idx('BZ');
+    if (name >= 0 && team >= 0 && bz >= 0) return { name, team, bz };
+  }
+  return null;
+}
+
 // Parse the rankings HTML into { normName: bzValue }. Row-by-row split avoids
 // catastrophic regex backtracking on the ~1.3MB page.
 function parseBZ(html) {
+  const cols = findHeaderIndices(html);
+  if (!cols) return {}; // couldn't locate columns — caller treats 0 players as an error
+
   const out = {};
+  const maxIdx = Math.max(cols.name, cols.team, cols.bz);
   const segments = html.split(/<tr[\s>]/i);
   for (const seg of segments) {
     const end = seg.indexOf('</tr>');
@@ -68,14 +90,16 @@ function parseBZ(html) {
     const re = /<td[^>]*>([\s\S]*?)<\/td>/g;
     let m;
     while ((m = re.exec(rowHtml)) !== null) cells.push(m[1]);
-    if (cells.length <= COL_TEAM) continue;
+    if (cells.length <= maxIdx) continue;
 
-    const name = cellText(cells[COL_NAME]);
-    const team = cellText(cells[COL_TEAM]);
-    const bzRaw = cellText(cells[COL_BZ]);
+    const name = cellText(cells[cols.name]);
+    const team = cellText(cells[cols.team]);
+    const bzRaw = cellText(cells[cols.bz]);
     if (!/^[A-Za-z]/.test(name)) continue;       // real player name
     if (!/^[A-Z]{2,3}$/.test(team)) continue;    // real NBA team cell
-    const mb = bzRaw.match(/-?\d+(?:\.\d+)?/);   // "236.01#1" -> 236.01
+    // anchored to the start: "236.01#1" -> 236.01. Un-anchored would wrongly match the
+    // "#289" rank suffix when the value itself is non-numeric, e.g. "-∞#289".
+    const mb = bzRaw.match(/^-?\d+(?:\.\d+)?/);
     if (!mb) continue;
     out[normName(name)] = parseFloat(mb[0]);
   }

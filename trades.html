@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Holdat — Trade History</title>
+<link rel="icon" type="image/png" href="assets/hype.png" />
+<style>
+  :root {
+    --bg: #16181c;
+    --card: #1b1f27;
+    --card2: #20242d;
+    --line: #2c313b;
+    --ink: #e8eaed;
+    --ink2: #9aa3af;
+    --ink3: #6b7280;
+    --orange: #ff6b35;
+    --teal: #2dd4bf;
+    --gold: #f2c14e;
+    --court: rgba(245,225,200,.10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* ---------- Blacktop court ---------- */
+  .court-bg {
+    position: fixed; inset: 0; z-index: 0; overflow: hidden;
+    background: radial-gradient(130% 90% at 50% -5%, #2b2622 0%, #221f1c 40%, #141312 100%);
+  }
+  .court-bg::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+    opacity: .14; mix-blend-mode: overlay;
+  }
+  .court-lines { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .court-lines line, .court-lines circle, .court-lines path, .court-lines rect {
+    stroke: var(--court); stroke-width: 3.5; fill: none;
+  }
+  /* ---------- Layout ---------- */
+  .wrap { position: relative; z-index: 1; max-width: 1320px; margin: 0 auto; padding: 28px 20px 80px; }
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 22px;
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand .logo-img {
+    height: 60px; width: 60px; border-radius: 13px; object-fit: cover; display: block;
+    border: 1px solid var(--line);
+    box-shadow: 0 0 22px rgba(255,107,53,.28);
+  }
+  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .controls { display: flex; gap: 10px; align-items: center; }
+  select.lg-switch {
+    background: var(--card); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 12px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+
+  /* top-level page nav (Rosters / Trade History) */
+  .pagebar { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+  .page-tab {
+    background: none; border: none; color: var(--ink3); font-size: 14px; font-weight: 800;
+    letter-spacing: .3px; padding: 9px 4px 12px; cursor: pointer; position: relative; text-transform: uppercase;
+    text-decoration: none; display: inline-block;
+  }
+  .page-tab:hover { color: var(--ink2); }
+  .page-tab.active { color: var(--orange); }
+  .page-tab.active::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
+    background: linear-gradient(90deg, var(--orange), var(--gold)); border-radius: 2px 2px 0 0;
+  }
+
+  /* ---------- Trade history ---------- */
+  .trades-list { display: flex; flex-direction: column; gap: 14px; }
+  .trade-card {
+    background: linear-gradient(180deg, var(--card2), var(--card));
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 6px 22px rgba(0,0,0,.3);
+  }
+  .trade-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.02);
+  }
+  .trade-date { font-size: 12px; font-weight: 700; color: var(--ink3); letter-spacing: .3px; }
+  .trade-week { font-size: 10px; font-weight: 800; color: var(--gold); text-transform: uppercase; letter-spacing: .5px; }
+  .trade-sides { display: grid; gap: 0; grid-template-columns: repeat(var(--n, 2), 1fr); }
+  .trade-side { padding: 14px 16px; }
+  .trade-side + .trade-side { border-left: 1px solid var(--line); }
+  .trade-side-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+  .trade-side-head img { width: 26px; height: 26px; border-radius: 7px; object-fit: cover; background: #11141a; border: 1px solid var(--line); }
+  .trade-side-head .tn { font-size: 13px; font-weight: 800; }
+  .trade-side-head .tn .gets { display: block; font-size: 9.5px; font-weight: 700; color: var(--ink3); text-transform: uppercase; letter-spacing: .5px; }
+  .trade-asset { display: flex; align-items: center; gap: 8px; padding: 5px 2px; }
+  .trade-asset img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; background: #11141a; flex: none; }
+  .trade-asset .an { font-size: 12.5px; font-weight: 700; }
+  .trade-asset .am { font-size: 10px; color: var(--ink3); font-weight: 600; }
+  .trade-asset .am .drafted-name { color: var(--teal); font-weight: 800; }
+  .trade-asset .pick-icon {
+    width: 24px; height: 24px; border-radius: 6px; background: var(--card); border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 900;
+    color: var(--gold); flex: none;
+  }
+  .empty-grp { color: var(--ink3); font-size: 12px; padding: 6px 5px; }
+  @media (max-width: 720px) {
+    .trade-sides { grid-template-columns: 1fr !important; }
+    .trade-side + .trade-side { border-left: none; border-top: 1px solid var(--line); }
+  }
+
+  .msg { text-align: center; color: var(--ink2); padding: 60px 20px; font-size: 15px; font-weight: 600; }
+  .msg.err { color: #ff8a8a; }
+  .spin { display: inline-block; width: 20px; height: 20px; border: 3px solid var(--line); border-top-color: var(--orange); border-radius: 50%; animation: sp 1s linear infinite; vertical-align: middle; margin-right: 10px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  a { color: var(--teal); }
+</style>
+</head>
+<body>
+  <div class="court-bg">
+    <svg class="court-lines" preserveAspectRatio="xMidYMid slice" viewBox="0 0 1000 1000">
+      <circle cx="500" cy="500" r="120" />
+      <circle cx="500" cy="500" r="60" />
+      <line x1="0" y1="500" x2="1000" y2="500" />
+      <rect x="385" y="0" width="230" height="190" />
+      <path d="M 385 190 A 115 115 0 0 0 615 190" />
+      <path d="M 150 0 A 350 350 0 0 1 850 0" transform="translate(0,40)" />
+      <rect x="385" y="810" width="230" height="190" />
+      <path d="M 385 810 A 115 115 0 0 1 615 810" />
+      <path d="M 150 1000 A 350 350 0 0 0 850 1000" transform="translate(0,-40)" />
+    </svg>
+  </div>
+
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <img class="logo-img" src="assets/hype.png" alt="Holdat — The Dynasty Begins">
+        <span class="sub" id="subLabel">Dynasty NBA</span>
+      </div>
+      <div class="controls">
+        <select class="lg-switch" id="lgSwitch"></select>
+      </div>
+    </header>
+
+    <div class="pagebar">
+      <a class="page-tab" id="rostersLink" href="/">Rosters</a>
+      <span class="page-tab active">Trade History</span>
+    </div>
+
+    <div id="app"><div class="msg"><span class="spin"></span>Loading trade history…</div></div>
+  </div>
+
+<script src="shared.js"></script>
+<script>
+let DATA_TEAMS = []; // {id, name, logo} — for team lookup in trade cards
+
+function teamLookup(id) {
+  const t = DATA_TEAMS.find(x => x.id === id);
+  return t ? { name: t.name, logo: t.logo } : null;
+}
+function pickLabel(a) {
+  const ord = a.round === 1 ? '1st' : a.round === 2 ? '2nd' : a.round === 3 ? '3rd' : `${a.round}th`;
+  return `${a.year || ''} ${ord} Rd${a.pick ? ' · Pick ' + a.pick : ''}`.trim();
+}
+function renderTradeAsset(asset) {
+  if (asset.kind === 'player') {
+    return `<div class="trade-asset">
+      <img src="${esc(asset.headshot||'')}" onerror="this.style.visibility='hidden'" alt="">
+      <div><div class="an">${esc(asset.name)}</div><div class="am">${esc(asset.nbaTeam||'FA')} · ${esc(displayPos(asset.pos))}</div></div>
+    </div>`;
+  }
+  const d = asset.drafted;
+  const meta = d
+    ? `Drafted <b class="drafted-name">${esc(d.name)}</b>${d.nbaTeam ? ' · ' + esc(d.nbaTeam) : ''}${d.pos ? ' · ' + esc(displayPos(d.pos)) : ''}`
+    : 'Draft Pick';
+  return `<div class="trade-asset">
+    <div class="pick-icon">${asset.round || '?'}</div>
+    <div><div class="an">${esc(pickLabel(asset))}</div><div class="am">${meta}</div></div>
+  </div>`;
+}
+function renderTradeCard(trade) {
+  const teamIds = trade.teamIds;
+  const sides = teamIds.map(tid => {
+    const lu = teamLookup(tid) || { name: trade.teamNames[tid] || 'Unknown', logo: null };
+    const received = trade.legs.filter(l => l.toId === tid);
+    return `<div class="trade-side">
+      <div class="trade-side-head">
+        <img src="${esc(lu.logo||'')}" onerror="this.style.visibility='hidden'" alt="">
+        <div class="tn">${esc(lu.name)}<span class="gets">Receives</span></div>
+      </div>
+      ${received.map(l => renderTradeAsset(l.asset)).join('') || '<div class="empty-grp">—</div>'}
+    </div>`;
+  }).join('');
+  return `<div class="trade-card">
+    <div class="trade-head">
+      <span class="trade-date">${esc(trade.date || '')}</span>
+      ${trade.week ? `<span class="trade-week">Period ${esc(trade.week)}</span>` : ''}
+    </div>
+    <div class="trade-sides" style="--n:${teamIds.length}">${sides}</div>
+  </div>`;
+}
+function renderTrades(list) {
+  if (!list.length) {
+    $('#app').innerHTML = `<div class="msg">No trades have been made in this league yet.</div>`;
+    return;
+  }
+  $('#app').innerHTML = `<div class="trades-list">${list.map(renderTradeCard).join('')}</div>`;
+}
+
+async function load() {
+  setupLeagueSwitcher();
+  const rl = $('#rostersLink');
+  if (rl) rl.href = `/?league=${encodeURIComponent(curLeague())}`;
+
+  const league = curLeague();
+  try {
+    // team names/logos for the "Receives" headers — cheap dedicated call, no roster/BZ work
+    const teamsRes = await fetch(`${API}?league=${encodeURIComponent(league)}&type=teams`);
+    const teamsJson = await teamsRes.json();
+    if (teamsRes.ok && teamsJson.fantasyTeams) {
+      DATA_TEAMS = teamsJson.fantasyTeams.map(t => ({ id: t.id, name: t.name, logo: t.logoUrl128 || t.logoUrl256 || null }));
+    }
+
+    const res = await fetch(`${API}?league=${encodeURIComponent(league)}&type=trades`);
+    const j = await res.json();
+    if (!res.ok || j.error) {
+      $('#app').innerHTML = `<div class="msg err">${esc(j.error || 'Failed to load trade history.')}</div>`;
+      return;
+    }
+    renderTrades(j.trades || []);
+  } catch (e) {
+    $('#app').innerHTML = `<div class="msg err">Network error: ${esc(e.message)}</div>`;
+  }
+}
+load();
+</script>
+</body>
+</html>

@@ -72,6 +72,21 @@
   .pill:hover { color: var(--ink); border-color: #3a4150; }
   .pill.active { background: var(--orange); color: #1a1208; border-color: var(--orange); }
 
+  /* top-level page nav (Rosters / Trade History) */
+  .pagebar { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+  .page-tab {
+    background: none; border: none; color: var(--ink3); font-size: 14px; font-weight: 800;
+    letter-spacing: .3px; padding: 9px 4px 12px; cursor: pointer; position: relative; text-transform: uppercase;
+    text-decoration: none; display: inline-block;
+  }
+  .page-tab:hover { color: var(--ink2); }
+  .page-tab.active { color: var(--orange); }
+  .page-tab.active::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
+    background: linear-gradient(90deg, var(--orange), var(--gold)); border-radius: 2px 2px 0 0;
+  }
+
+
   /* ---------- Cards (full-width rows) ---------- */
   .grid { display: flex; flex-direction: column; gap: 12px; }
   .card {
@@ -210,17 +225,17 @@
       </div>
     </header>
 
+    <div class="pagebar">
+      <span class="page-tab active">Rosters</span>
+      <a class="page-tab" id="tradesLink" href="/trades">Trade History</a>
+    </div>
     <div class="sortbar" id="sortbar"></div>
     <div class="note" id="overallNote"></div>
     <div id="app"><div class="msg"><span class="spin"></span>Loading league…</div></div>
   </div>
 
+<script src="shared.js"></script>
 <script>
-const API = '/api/fantrax';
-const LEAGUES = [
-  { id: 'mkuoaxbhmqrct7rf', label: '26-27 Dynasty' },
-  { id: 'zdmn1wu0md6fpz8d', label: '25-26 (History)' },
-];
 const CATS = ['FG%','3PTM','FT%','PTS','REB','AST','ST','BLK','TO'];
 const PCT_CATS = new Set(['FG%','FT%']);
 const LOWER_BETTER = new Set(['TO']);
@@ -232,13 +247,7 @@ let SORT = 'overall';
 // Basketball Monster "BZ" (Bazemore dynasty value) — { normName: bz }
 const BBM = { map: {}, count: 0, loaded: false };
 
-// ---------- helpers ----------
-const $ = (s, r=document) => r.querySelector(s);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const qparam = (k) => new URLSearchParams(location.search).get(k);
-// display-only: drop the generic G/F slots (implied by PG/SG/SF/PF); keep PG,SG,SF,PF,C
-const displayPos = (pos) => String(pos || '').split(',').map(s => s.trim())
-  .filter(p => p && p !== 'G' && p !== 'F').join(',');
+// ---------- helpers (API, LEAGUES, $, esc, qparam, displayPos, curLeague, setupLeagueSwitcher — shared.js) ----------
 // player-name key for matching Fantrax <-> dynasty-value source (must mirror server normName)
 const normName = (s) => String(s || '').toLowerCase()
   .normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -559,20 +568,6 @@ function renderSortbar() {
 window.setSort = (k) => { SORT = k; renderSortbar(); render(); };
 
 // ---------- boot ----------
-function curLeague() {
-  return qparam('league') || LEAGUES[0].id;
-}
-function setupSwitch() {
-  const sel = $('#lgSwitch');
-  sel.innerHTML = LEAGUES.map(l => `<option value="${l.id}">${l.label}</option>`).join('');
-  sel.value = curLeague();
-  const found = LEAGUES.find(l => l.id === sel.value);
-  if (found) $('#subLabel').textContent = found.label;
-  sel.onchange = () => {
-    const u = new URL(location.href); u.searchParams.set('league', sel.value);
-    location.href = u.toString();
-  };
-}
 
 async function loadBBM() {
   try {
@@ -595,7 +590,9 @@ function renderOverallNote() {
 }
 
 async function load() {
-  setupSwitch();
+  setupLeagueSwitcher();
+  const tl = $('#tradesLink');
+  if (tl) tl.href = `/trades?league=${encodeURIComponent(curLeague())}`;
   const bbmReady = loadBBM(); // fetch BZ in parallel with the league
   try {
     const res = await fetch(`${API}?league=${encodeURIComponent(curLeague())}`);
