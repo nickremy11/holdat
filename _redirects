@@ -1,18 +1,13 @@
-# Path-based routing for the rosters pages, scoped by season slug (see the
-# Phase 1 plan's "URL structure" section). These are rewrites (200), not
-# redirects -- the URL bar keeps the clean path while Pages serves the
-# existing static file. Client-side JS reads location.pathname instead of
-# today's ?league=/?team= query params for these routes.
+# Path-based season/team routing (e.g. /league2627/[team-slug]) was tried here
+# and reverted -- Cloudflare's _redirects placeholders match any single path
+# segment, so /:season and /:season/:team silently swallowed real static
+# files that happen to have the same shape (/shared.js, /trades,
+# /assets/hype.png), serving them as the homepage HTML instead of their real
+# content. _redirects only applies to static assets, not Pages Functions, so
+# /api/* was never affected -- but the client-side JS in shared.js broke
+# (wrong MIME type), which is what broke the whole page.
 #
-# :season/:team matches a single path segment each (no slashes), which is all
-# a season slug ("league2627") or team slug ever needs.
-
-# /league2627/matchup/123 -> a specific week's matchup. No matchup.html yet
-# (later phase) -- add this once that page exists:
-# /:season/matchup/:id   /matchup.html   200
-
-# Rewrite target is "/", not "/index.html" -- Pages' clean-URL canonicalization
-# turns a /index.html rewrite target into an outer 308 redirect to "/" instead
-# of serving it in place, which defeats the point of a path-based rewrite.
-/:season/:team   /   200
-/:season         /   200
+# Revisit with a scheme that can't collide with real filenames (e.g. a
+# distinguishing prefix like /s/:season) once something actually reads the
+# season/team from the URL path -- right now nothing does, so there was no
+# functional loss in removing this.
