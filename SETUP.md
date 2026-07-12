@@ -29,48 +29,92 @@ holdat/
 ├── functions/api/auth/        # request-link, verify, logout, me — magic-link login
 ├── functions/api/admin/       # import.js (Fantrax -> D1), import-player-universe.js (NBA.com -> D1)
 ├── migrations/                # D1 schema, applied via `wrangler d1 migrations apply`
-├── _redirects                 # path-based routing: /[season-slug]/[team-slug] -> index.html
+├── _redirects                 # currently a no-op — see "Current status" below
 └── SETUP.md
 ```
 
-## Phase 1: native data model (D1), auth, and the Fantrax importer
+## Current status (post-Phase-1)
 
-`holdat` is moving from a read-only Fantrax viewer to owning rosters, lineups,
-trades, and drafts natively. Fantrax stays scraped only as a one-time/occasional
-importer source (`functions/api/admin/import.js`), not a live dependency.
+Phase 1 (auth, native D1 data model, Fantrax importer) is built and deployed.
+It is **infrastructure with nothing user-facing on top of it yet** — read this
+section before assuming any of it is usable end-to-end.
 
-### One-time setup
+**Live and unchanged**: `index.html` (`/`) and `trades.html` (`/trades`) still
+read live from Fantrax on every page load, exactly as before Phase 1. No D1
+involved in what a visitor actually sees today.
+
+**Built and deployed, but dormant**:
+- **D1 schema** — full schema (leagues, seasons, franchises, teams, players,
+  rosters, draft, trades, matchups/stats tables — see `migrations/`).
+  Populated with real data for seasons **23-24, 24-25, 25-26**. **26-27 is
+  intentionally not yet imported** — pending the live 26-27 draft finishing;
+  run it after with (season/year/label/slug per the Leagues table below):
+  ```bash
+  curl -X POST ".../api/admin/import?season=mkuoaxbhmqrct7rf&year=2026&label=26-27&slug=league2627&current=1&token=$ADMIN_IMPORT_TOKEN"
+  ```
+- **Magic-link auth** (`/api/auth/request-link`, `verify`, `logout`, `me`) —
+  functional, but **zero owner accounts exist in production** (no `users`
+  rows, no `franchises.owner_user_id` linked), and there's **no `/login`
+  page** yet. Nothing user-facing uses this today.
+- **Admin import tools** (`functions/api/admin/import.js`,
+  `import-player-universe.js`) — one-time/occasional commissioner tools
+  gated by `ADMIN_IMPORT_TOKEN`, not end-user-facing.
+  **Lesson learned the hard way**: write every row through
+  `functions/_lib/db.js`'s `batchUpsert`/`batchInsert`/`batchRun` (D1's
+  `batch()` API), never one `await`-per-row `INSERT`/`UPDATE` — a season
+  import does hundreds of rows, and Cloudflare caps subrequests per Worker
+  invocation (50 on the free plan). The original per-row version worked fine
+  under local `wrangler dev` (which doesn't enforce the limit) and then
+  failed in production.
+
+**Not built at all**: no `/login` page, no commissioner tool to seed owner
+accounts or link them to franchises, no lineup/roster editing
+(`roster_entries.slot_id` is `NULL` for every player, `lineup_slots` has zero
+configured rows for any season, no write endpoint exists for it), no
+commissioner UI for roster rules (`season_settings` rows exist but every
+field is `NULL`).
+
+**Next up**: `/login` page, a commissioner tool to seed the 14 owners and
+link each to their franchise, `lineup_slots`/`season_settings` configuration,
+and the actual lineup-editing UI/endpoint. `index.html` should keep reading
+live from Fantrax until lineup editing ships and makes D1 authoritative for
+roster state — switching sooner risks a Fantrax-side move silently going
+stale.
+
+**`_redirects` note**: path-based season/team routing (`/league2627/[team]`)
+was tried and reverted — Cloudflare's redirect placeholders match *any*
+single path segment, so `/:season` and `/:season/:team` silently served
+`/shared.js`, `/trades`, and `/assets/hype.png` as the homepage HTML instead
+of their real content (wrong MIME type, broke the page). Full explanation is
+in the comments inside `_redirects` itself. Any future attempt needs a
+scheme that can't collide with real filenames (e.g. a `/s/:season` prefix).
+
+### One-time setup (D1 + email, already done in production)
 
 ```bash
 # 1. Create the D1 database and wire the binding into wrangler.toml
-#    (the [[d1_databases]] block is already there with a placeholder
-#    database_id — replace it with the id this command prints)
 npx wrangler d1 create holdat
 
 # 2. Apply the schema
 npx wrangler d1 migrations apply holdat --local     # for `wrangler pages dev`
 npx wrangler d1 migrations apply holdat --remote    # for production
 
-# 3. New secrets
+# 3. Secrets (already set in production; values live in a password manager,
+#    not here — this file is committed to git)
 npx wrangler pages secret put ADMIN_IMPORT_TOKEN     # gates /api/admin/*
 npx wrangler pages secret put RESEND_API_KEY         # from resend.com/api-keys
-# EMAIL_FROM is non-secret config — add as a [vars] entry in wrangler.toml,
-# or as a plain secret, whichever this project ends up using
+npx wrangler pages secret put EMAIL_FROM             # e.g. accounts@ffhistorian.com
 ```
 
-Email is sent via [Resend](https://resend.com) rather than Cloudflare's own
-Email Sending API — that needs a Workers Paid plan to send to arbitrary
-recipients, which this project doesn't have. Resend's free tier (3,000
-emails/mo) has no such dependency. One-time setup at resend.com:
-1. Create a free account.
-2. Add the sending domain (e.g. `ffhistorian.com`) and add the DNS records
-   Resend gives you (SPF/DKIM) at your domain registrar/DNS host.
-3. Create an API key, use it as `RESEND_API_KEY`.
+Email sends via [Resend](https://resend.com), not Cloudflare's own Email
+Sending API — that needs a Workers Paid plan to send to arbitrary recipients,
+which this project doesn't have. Resend's free tier (3,000 emails/mo) has no
+such dependency. One-time setup at resend.com: create a free account, add +
+DNS-verify the sending domain (SPF/DKIM records at your DNS host), create an
+API key. If this needs to change providers again, `functions/_lib/email.js`
+is the only file that talks to the provider.
 
-If this needs to change providers again later, `functions/_lib/email.js` is
-the only file that talks to the provider.
-
-Locally, `ADMIN_IMPORT_TOKEN` / `RESEND_API_KEY` / `EMAIL_FROM` already have
+Locally, `ADMIN_IMPORT_TOKEN` / `RESEND_API_KEY` / `EMAIL_FROM` have
 placeholder entries in `.dev.vars` (gitignored) — fill in a real
 `RESEND_API_KEY` there to test the login-link email locally.
 
@@ -82,21 +126,17 @@ write is a natural-key upsert):
 
 ```bash
 # Dry run first — review the proposed team -> franchise mapping before writing anything
-curl -X POST "http://localhost:8788/api/admin/import?season=qybhh93dlge64jyi&year=2023&label=23-24&slug=league2324&dryRun=1&token=$ADMIN_IMPORT_TOKEN"
+curl -X POST ".../api/admin/import?season=qybhh93dlge64jyi&year=2023&label=23-24&slug=league2324&dryRun=1&token=$ADMIN_IMPORT_TOKEN"
 
 # Then for real, oldest -> newest, marking only the active season current=1
-curl -X POST ".../api/admin/import?season=qybhh93dlge64jyi&year=2023&label=23-24&slug=league2324&token=..."
-curl -X POST ".../api/admin/import?season=uxe3kqislwu07xfm&year=2024&label=24-25&slug=league2425&token=..."
-curl -X POST ".../api/admin/import?season=zdmn1wu0md6fpz8d&year=2025&label=25-26&slug=league2526&token=..."
-curl -X POST ".../api/admin/import?season=mkuoaxbhmqrct7rf&year=2026&label=26-27&slug=league2627&current=1&token=..."
+curl -X POST ".../api/admin/import?season=qybhh93dlge64jyi&year=2023&label=23-24&slug=league2324&token=$ADMIN_IMPORT_TOKEN"
+curl -X POST ".../api/admin/import?season=uxe3kqislwu07xfm&year=2024&label=24-25&slug=league2425&token=$ADMIN_IMPORT_TOKEN"
+curl -X POST ".../api/admin/import?season=zdmn1wu0md6fpz8d&year=2025&label=25-26&slug=league2526&token=$ADMIN_IMPORT_TOKEN"
+curl -X POST ".../api/admin/import?season=mkuoaxbhmqrct7rf&year=2026&label=26-27&slug=league2627&current=1&token=$ADMIN_IMPORT_TOKEN"
 
 # Once: full NBA + two-way player universe for free-agent search (source: NBA.com, free)
-curl "http://localhost:8788/api/admin/import-player-universe?token=$ADMIN_IMPORT_TOKEN"
+curl ".../api/admin/import-player-universe?token=$ADMIN_IMPORT_TOKEN"
 ```
-
-`index.html`/`trades.html` keep reading live from Fantrax through Phase 1 —
-they don't switch to D1 until the write endpoints (lineups/trades) that make
-D1 authoritative for that data ship in a later phase.
 
 Each page is self-contained (own `<style>` block, own load()) but shares `shared.js`
 for the league list and small helpers, so adding a season only means editing one
