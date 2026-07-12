@@ -10,6 +10,14 @@
 // always safe and reconciles cross-season links (e.g. a pick traded before
 // its season was imported) regardless of import order.
 //
+// IMPORTANT: writes are batched (see functions/_lib/db.js's batchUpsert/
+// batchInsert/batchRun). Cloudflare caps the number of subrequests (fetches +
+// D1 calls) a single Worker invocation may make -- an earlier version of this
+// file did one `await` per player/pick/trade-leg and blew through that limit
+// on a real season (hundreds of rows). Everything below collects rows into
+// arrays first and writes each table in one (or a handful of chunked) D1
+// batch call(s) instead.
+//
 // Params:
 //   ?token=<ADMIN_IMPORT_TOKEN>   required, same secret-gated pattern as
 //                                 bbm.js's ?refresh= token
@@ -22,7 +30,7 @@
 //                                 return the proposed team->franchise mapping
 //                                 for commissioner review -- no writes happen
 
-import { json, first, all, run, upsert } from '../../_lib/db.js';
+import { json, first, all, run, batchUpsert, batchInsert, batchRun } from '../../_lib/db.js';
 import { fxReq, parseRoster, parseTrades, CATS, LOWER_BETTER, YEAR_TO_LEAGUE } from '../fantrax.js';
 
 const LEAGUE_TO_YEAR = Object.fromEntries(Object.entries(YEAR_TO_LEAGUE).map(([y, id]) => [id, parseInt(y, 10)]));
@@ -43,51 +51,34 @@ function mapRosterStatus(_statusId) {
 
 // Franchise cross-season identity: exact name match first, then an
 // unambiguous substring match (same heuristic resolveDraftedPicks() in
-// fantrax.js already uses for teams that renamed between seasons).
-async function resolveFranchise(db, teamName) {
+// fantrax.js already uses for teams that renamed between seasons). Operates
+// on an in-memory candidate list (loaded once per request) rather than a
+// per-team SELECT, which is what let this blow the subrequest budget before.
+function matchFranchise(candidates, teamName) {
   const key = teamName.trim().toLowerCase();
-  const exact = await first(db, 'SELECT id, name FROM franchises WHERE lower(name) = ?', key);
-  if (exact) return { franchiseId: exact.id, matchedName: exact.name, isNew: false };
-
-  const candidates = await all(db, 'SELECT id, name FROM franchises');
+  const exact = candidates.find((f) => f.name.trim().toLowerCase() === key);
+  if (exact) return exact.id;
   const hits = candidates.filter((f) => {
     const n = f.name.trim().toLowerCase();
     return n.includes(key) || key.includes(n);
   });
-  if (hits.length === 1) return { franchiseId: hits[0].id, matchedName: hits[0].name, isNew: false };
-
-  return { franchiseId: null, matchedName: null, isNew: true };
+  return hits.length === 1 ? hits[0].id : null;
 }
 
-async function upsertPlayer(db, sc) {
-  const now = Date.now();
-  const playerId = await upsert(
-    db, 'players', ['fantrax_scorer_id'],
-    {
-      fantrax_scorer_id: String(sc.scorerId),
-      full_name: sc.name,
-      short_name: sc.shortName || sc.name,
-      nba_team: sc.nbaTeam || null,
-      nba_team_name: sc.nbaTeamName || null,
-      headshot_url: sc.headshot || null,
-      position_eligibility: sc.pos || '',
-      is_two_way: null,
-      birth_date: null,
-      created_at: now,
-      updated_at: now,
-    },
-    ['created_at']
-  );
-  await upsert(db, 'player_external_ids', ['source', 'external_id'], {
-    player_id: playerId, source: 'fantrax', external_id: String(sc.scorerId),
-  });
-  return playerId;
-}
-
-async function findPlayerByScorerId(db, scorerId) {
-  if (!scorerId) return null;
-  const row = await first(db, 'SELECT id FROM players WHERE fantrax_scorer_id = ?', String(scorerId));
-  return row?.id ?? null;
+function playerRow(sc, now) {
+  return {
+    fantrax_scorer_id: String(sc.scorerId),
+    full_name: sc.name,
+    short_name: sc.shortName || sc.name,
+    nba_team: sc.nbaTeam || null,
+    nba_team_name: sc.nbaTeamName || null,
+    headshot_url: sc.headshot || null,
+    position_eligibility: sc.pos || '',
+    is_two_way: null,
+    birth_date: null,
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 export async function onRequestPost(context) {
@@ -116,215 +107,33 @@ export async function onRequestPost(context) {
   const warnings = [];
 
   try {
-    // --- Teams + franchise resolution (dry-run stops here) ---
+    // ================= Fetch everything from Fantrax first ==================
     const teamsData = await fxReq('getFantasyTeams', { leagueId: fantraxLeagueId }, cookie);
     const fxTeams = teamsData.fantasyTeams || [];
 
-    const franchiseReport = [];
-    for (const t of fxTeams) {
-      const resolved = await resolveFranchise(db, t.name);
-      franchiseReport.push({ fantraxTeamId: t.id, teamName: t.name, ...resolved });
-    }
+    const franchiseCandidates = await all(db, 'SELECT id, name FROM franchises');
+
+    const franchiseReport = fxTeams.map((t) => {
+      const id = matchFranchise(franchiseCandidates, t.name);
+      const matched = id ? franchiseCandidates.find((f) => f.id === id) : null;
+      return { fantraxTeamId: t.id, teamName: t.name, franchiseId: id, matchedName: matched?.name ?? null, isNew: !id };
+    });
 
     if (dryRun) {
       return json({ dryRun: true, season: fantraxLeagueId, year, teamCount: fxTeams.length, franchiseReport });
     }
 
-    // --- leagues (singleton) + season + config ---
-    let leagueRow = await first(db, 'SELECT id FROM leagues LIMIT 1');
-    if (!leagueRow) {
-      const res = await run(db, 'INSERT INTO leagues (name, created_at) VALUES (?, ?)', 'HOLDAT Dynasty', now);
-      leagueRow = { id: res.meta.last_row_id };
-    }
-    const leagueId = leagueRow.id;
-
-    const seasonId = await upsert(
-      db, 'seasons', ['fantrax_league_id'],
-      {
-        league_id: leagueId, year, label, slug,
-        fantrax_league_id: fantraxLeagueId,
-        status: isCurrent ? 'active' : 'complete',
-        start_date: null, end_date: null, created_at: now,
-      },
-      ['created_at']
-    );
-
-    await upsert(db, 'season_settings', ['season_id'], {
-      season_id: seasonId, roster_size: null, bench_slots: null, ir_slots: null,
-      keeper_rules: null, playoff_format: null, notes: null,
-    }, [], 'season_id');
-
-    for (let i = 0; i < CATS.length; i++) {
-      const code = CATS[i];
-      await upsert(db, 'scoring_categories', ['season_id', 'code'], {
-        season_id: seasonId, code, display_order: i,
-        category_type: RATE_CATS.has(code) ? 'rate' : 'counting',
-        lower_is_better: LOWER_BETTER.has(code) ? 1 : 0,
-      });
-    }
-
-    // --- Franchises + teams ---
-    const teamIdByFantraxId = {};
-    const franchiseIdByFantraxTeamId = {};
-    for (const t of fxTeams) {
-      const rep = franchiseReport.find((r) => r.fantraxTeamId === t.id);
-      let franchiseId = rep.franchiseId;
-      if (!franchiseId) {
-        const res = await run(
-          db, 'INSERT INTO franchises (name, short_name, logo_url, created_at) VALUES (?, ?, ?, ?)',
-          t.name, t.shortName || null, t.logoUrl128 || t.logoUrl256 || null, now
-        );
-        franchiseId = res.meta.last_row_id;
-      }
-      franchiseIdByFantraxTeamId[t.id] = franchiseId;
-
-      const teamId = await upsert(db, 'teams', ['season_id', 'fantrax_team_id'], {
-        season_id: seasonId,
-        franchise_id: franchiseId,
-        name: t.name,
-        short_name: t.shortName || null,
-        slug: slugify(t.name),
-        logo_url: t.logoUrl128 || t.logoUrl256 || null,
-        fantrax_team_id: String(t.id),
-        draft_slot: null,
-      });
-      teamIdByFantraxId[t.id] = teamId;
-    }
-
-    // --- Standings snapshot ---
     const standingsData = await fxReq('getStandings', { leagueId: fantraxLeagueId }, cookie);
-    const tl = standingsData.tableList && standingsData.tableList[0];
-    if (tl && tl.rows) {
-      const hdr = (tl.header.cells || []).map((c) => c.shortName || c.name);
-      for (const row of tl.rows) {
-        const fixed = row.fixedCells || [];
-        const fantraxTeamId = fixed[1] && fixed[1].teamId;
-        if (!fantraxTeamId || !teamIdByFantraxId[fantraxTeamId]) continue;
-        const cells = row.cells || [];
-        const rec = {};
-        hdr.forEach((h, i) => { rec[h] = cells[i] && cells[i].content; });
-        await upsert(db, 'season_standings', ['team_id'], {
-          team_id: teamIdByFantraxId[fantraxTeamId],
-          rank: fixed[0]?.content != null ? parseInt(fixed[0].content, 10) : null,
-          wins: rec['W'] != null ? parseInt(rec['W'], 10) : null,
-          losses: rec['L'] != null ? parseInt(rec['L'], 10) : null,
-          ties: rec['T'] != null ? parseInt(rec['T'], 10) : null,
-          win_pct: rec['Win%'] || null,
-          pts_for: rec['PtsF'] != null ? parseFloat(rec['PtsF']) : null,
-          pts_against: rec['PtsA'] != null ? parseFloat(rec['PtsA']) : null,
-        });
-      }
-    }
 
-    // --- Rosters (players + roster_entries + future draft-pick ownership) ---
-    const rosterPicksByFantraxTeam = {};
+    const rosterDataByFantraxTeam = {};
     for (const t of fxTeams) {
-      const rosterData = await fxReq('getTeamRosterInfo', { leagueId: fantraxLeagueId, teamId: t.id }, cookie);
-      const parsed = parseRoster(rosterData);
-      rosterPicksByFantraxTeam[t.id] = parsed.picks;
-      const teamId = teamIdByFantraxId[t.id];
-
-      for (const p of parsed.players) {
-        if (!p.scorerId) continue;
-        const playerId = await upsertPlayer(db, p);
-        await upsert(
-          db, 'roster_entries', ['team_id', 'player_id'],
-          {
-            team_id: teamId, player_id: playerId, slot_id: null,
-            status: mapRosterStatus(p.statusId),
-            fantrax_status_id: p.statusId != null ? String(p.statusId) : null,
-            is_rookie_season: p.rookie ? 1 : 0,
-            acquired_at: now, acquired_via: 'import',
-            created_at: now, updated_at: now,
-          },
-          ['created_at', 'acquired_at', 'acquired_via']
-        );
-      }
+      rosterDataByFantraxTeam[t.id] = parseRoster(
+        await fxReq('getTeamRosterInfo', { leagueId: fantraxLeagueId, teamId: t.id }, cookie)
+      );
     }
 
-    for (const t of fxTeams) {
-      const picks = rosterPicksByFantraxTeam[t.id] || [];
-      const currentFranchiseId = franchiseIdByFantraxTeamId[t.id];
-      for (const yearEntry of picks) {
-        for (const d of yearEntry.detail || []) {
-          const originalFranchiseId = franchiseIdByFantraxTeamId[d.from] || currentFranchiseId;
-          await upsert(
-            db, 'draft_pick_assets', ['draft_year', 'round', 'original_franchise_id'],
-            {
-              draft_year: yearEntry.year, round: d.round,
-              original_franchise_id: originalFranchiseId,
-              current_franchise_id: currentFranchiseId,
-              draft_pick_id: null, created_at: now,
-            },
-            ['created_at', 'draft_pick_id']
-          );
-        }
-      }
-    }
-
-    // --- Draft results ---
     const draftData = await fxReq('getDraftResults', { leagueId: fantraxLeagueId }, cookie).catch(() => null);
-    if (draftData) {
-      for (const s of draftData.scorers || []) {
-        if (!s.scorerId) continue;
-        await upsertPlayer(db, {
-          scorerId: s.scorerId, name: s.name, shortName: s.name,
-          nbaTeam: s.teamShortName || null, nbaTeamName: null,
-          pos: s.posShortNames || '', headshot: s.headshotUrl || null,
-        });
-      }
 
-      const order = draftData.fantasyTeamsOrdered || [];
-      const slotsPerRound = order.length || fxTeams.length;
-      const picksOrdered = draftData.draftPicksOrdered || [];
-      const rounds = picksOrdered.reduce((max, p) => Math.max(max, p.round), 0);
-      const allDrafted = picksOrdered.length > 0 && picksOrdered.every((p) => p.scorerId);
-      const anyDrafted = picksOrdered.some((p) => p.scorerId);
-
-      const draftClassId = await upsert(db, 'draft_classes', ['season_id'], {
-        season_id: seasonId, draft_type: 'rookie', rounds, slots_per_round: slotsPerRound,
-        status: allDrafted ? 'complete' : anyDrafted ? 'in_progress' : 'scheduled',
-        completed_at: null,
-      });
-
-      const franchiseIdBySlot = {};
-      for (let i = 0; i < order.length; i++) {
-        const slot = i + 1;
-        const teamId = teamIdByFantraxId[order[i].id];
-        if (!teamId) continue;
-        await upsert(db, 'draft_order', ['draft_class_id', 'slot'], {
-          draft_class_id: draftClassId, slot, team_id: teamId,
-        });
-        franchiseIdBySlot[slot] = franchiseIdByFantraxTeamId[order[i].id];
-      }
-
-      for (const p of picksOrdered) {
-        const teamId = teamIdByFantraxId[p.teamId];
-        if (!teamId) { warnings.push(`draft pick R${p.round} slot ${p.pickNumber}: unknown team ${p.teamId}`); continue; }
-        const playerId = await findPlayerByScorerId(db, p.scorerId);
-        const overallPick = slotsPerRound ? (p.round - 1) * slotsPerRound + p.pickNumber : p.pickNumber;
-
-        const draftPickId = await upsert(db, 'draft_picks', ['draft_class_id', 'round', 'slot'], {
-          draft_class_id: draftClassId, round: p.round, slot: p.pickNumber,
-          overall_pick: overallPick, team_id: teamId, player_id: playerId, drafted_at: null,
-        });
-
-        const originalFranchiseId = franchiseIdBySlot[p.pickNumber];
-        if (originalFranchiseId) {
-          await upsert(
-            db, 'draft_pick_assets', ['draft_year', 'round', 'original_franchise_id'],
-            {
-              draft_year: year, round: p.round, original_franchise_id: originalFranchiseId,
-              current_franchise_id: franchiseIdByFantraxTeamId[p.teamId] || originalFranchiseId,
-              draft_pick_id: draftPickId, created_at: now,
-            },
-            ['created_at']
-          );
-        }
-      }
-    }
-
-    // --- Trade history ---
     const tradeRows = [];
     let page = 1, totalPages = 1;
     do {
@@ -336,25 +145,259 @@ export async function onRequestPost(context) {
       totalPages = (out && out.paginatedResultSet && out.paginatedResultSet.totalNumPages) || 1;
       page += 1;
     } while (page <= totalPages && page <= 10);
-
     const trades = parseTrades(tradeRows);
-    for (const trade of trades) {
+
+    // ============================ leagues/season =============================
+    let leagueRow = await first(db, 'SELECT id FROM leagues LIMIT 1');
+    if (!leagueRow) {
+      const res = await run(db, 'INSERT INTO leagues (name, created_at) VALUES (?, ?)', 'HOLDAT Dynasty', now);
+      leagueRow = { id: res.meta.last_row_id };
+    }
+    const leagueId = leagueRow.id;
+
+    const [seasonId] = await batchUpsert(
+      db, 'seasons', ['fantrax_league_id'],
+      [{
+        league_id: leagueId, year, label, slug,
+        fantrax_league_id: fantraxLeagueId,
+        status: isCurrent ? 'active' : 'complete',
+        start_date: null, end_date: null, created_at: now,
+      }],
+      ['created_at']
+    );
+
+    await batchUpsert(db, 'season_settings', ['season_id'], [{
+      season_id: seasonId, roster_size: null, bench_slots: null, ir_slots: null,
+      keeper_rules: null, playoff_format: null, notes: null,
+    }], [], 'season_id');
+
+    await batchUpsert(
+      db, 'scoring_categories', ['season_id', 'code'],
+      CATS.map((code, i) => ({
+        season_id: seasonId, code, display_order: i,
+        category_type: RATE_CATS.has(code) ? 'rate' : 'counting',
+        lower_is_better: LOWER_BETTER.has(code) ? 1 : 0,
+      }))
+    );
+
+    // ========================= franchises + teams =============================
+    const newFranchiseTeams = fxTeams.filter((t) => !franchiseReport.find((r) => r.fantraxTeamId === t.id).franchiseId);
+    const newFranchiseIds = await batchInsert(
+      db, 'franchises',
+      newFranchiseTeams.map((t) => ({
+        name: t.name, short_name: t.shortName || null, logo_url: t.logoUrl128 || t.logoUrl256 || null, created_at: now,
+      }))
+    );
+    const franchiseIdByFantraxTeamId = {};
+    newFranchiseTeams.forEach((t, i) => { franchiseIdByFantraxTeamId[t.id] = newFranchiseIds[i]; });
+    for (const rep of franchiseReport) {
+      if (rep.franchiseId) franchiseIdByFantraxTeamId[rep.fantraxTeamId] = rep.franchiseId;
+    }
+
+    const teamIds = await batchUpsert(
+      db, 'teams', ['season_id', 'fantrax_team_id'],
+      fxTeams.map((t) => ({
+        season_id: seasonId,
+        franchise_id: franchiseIdByFantraxTeamId[t.id],
+        name: t.name,
+        short_name: t.shortName || null,
+        slug: slugify(t.name),
+        logo_url: t.logoUrl128 || t.logoUrl256 || null,
+        fantrax_team_id: String(t.id),
+        draft_slot: null,
+      }))
+    );
+    const teamIdByFantraxId = {};
+    fxTeams.forEach((t, i) => { teamIdByFantraxId[t.id] = teamIds[i]; });
+    const franchiseIdByTeamId = {};
+    fxTeams.forEach((t) => { franchiseIdByTeamId[teamIdByFantraxId[t.id]] = franchiseIdByFantraxTeamId[t.id]; });
+
+    // ============================ standings snapshot ===========================
+    const standingsRows = [];
+    const tl = standingsData.tableList && standingsData.tableList[0];
+    if (tl && tl.rows) {
+      const hdr = (tl.header.cells || []).map((c) => c.shortName || c.name);
+      for (const row of tl.rows) {
+        const fixed = row.fixedCells || [];
+        const fantraxTeamId = fixed[1] && fixed[1].teamId;
+        if (!fantraxTeamId || !teamIdByFantraxId[fantraxTeamId]) continue;
+        const cells = row.cells || [];
+        const rec = {};
+        hdr.forEach((h, i) => { rec[h] = cells[i] && cells[i].content; });
+        standingsRows.push({
+          team_id: teamIdByFantraxId[fantraxTeamId],
+          rank: fixed[0]?.content != null ? parseInt(fixed[0].content, 10) : null,
+          wins: rec['W'] != null ? parseInt(rec['W'], 10) : null,
+          losses: rec['L'] != null ? parseInt(rec['L'], 10) : null,
+          ties: rec['T'] != null ? parseInt(rec['T'], 10) : null,
+          win_pct: rec['Win%'] || null,
+          pts_for: rec['PtsF'] != null ? parseFloat(rec['PtsF']) : null,
+          pts_against: rec['PtsA'] != null ? parseFloat(rec['PtsA']) : null,
+        });
+      }
+    }
+    await batchUpsert(db, 'season_standings', ['team_id'], standingsRows);
+
+    // ===== players (rosters + draft scorers, deduped) + roster_entries =========
+    const playerSourceByScorerId = new Map();
+    for (const t of fxTeams) {
+      for (const p of rosterDataByFantraxTeam[t.id].players) {
+        if (p.scorerId) playerSourceByScorerId.set(String(p.scorerId), p);
+      }
+    }
+    for (const s of (draftData && draftData.scorers) || []) {
+      if (!s.scorerId) continue;
+      if (!playerSourceByScorerId.has(String(s.scorerId))) {
+        playerSourceByScorerId.set(String(s.scorerId), {
+          scorerId: s.scorerId, name: s.name, shortName: s.name,
+          nbaTeam: s.teamShortName || null, nbaTeamName: null,
+          pos: s.posShortNames || '', headshot: s.headshotUrl || null,
+        });
+      }
+    }
+
+    const scorerIds = [...playerSourceByScorerId.keys()];
+    const playerIds = await batchUpsert(
+      db, 'players', ['fantrax_scorer_id'],
+      scorerIds.map((id) => playerRow(playerSourceByScorerId.get(id), now)),
+      ['created_at']
+    );
+    const playerIdByScorerId = new Map(scorerIds.map((id, i) => [id, playerIds[i]]));
+
+    await batchUpsert(
+      db, 'player_external_ids', ['source', 'external_id'],
+      scorerIds.map((id) => ({ player_id: playerIdByScorerId.get(id), source: 'fantrax', external_id: id }))
+    );
+
+    const rosterEntryRows = [];
+    for (const t of fxTeams) {
+      const teamId = teamIdByFantraxId[t.id];
+      for (const p of rosterDataByFantraxTeam[t.id].players) {
+        if (!p.scorerId) continue;
+        rosterEntryRows.push({
+          team_id: teamId, player_id: playerIdByScorerId.get(String(p.scorerId)), slot_id: null,
+          status: mapRosterStatus(p.statusId),
+          fantrax_status_id: p.statusId != null ? String(p.statusId) : null,
+          is_rookie_season: p.rookie ? 1 : 0,
+          acquired_at: now, acquired_via: 'import',
+          created_at: now, updated_at: now,
+        });
+      }
+    }
+    await batchUpsert(db, 'roster_entries', ['team_id', 'player_id'], rosterEntryRows, ['created_at', 'acquired_at', 'acquired_via']);
+
+    // ==================== future draft-pick ownership (roster data) ===========
+    const futurePickAssetRows = [];
+    for (const t of fxTeams) {
+      const currentFranchiseId = franchiseIdByFantraxTeamId[t.id];
+      for (const yearEntry of rosterDataByFantraxTeam[t.id].picks || []) {
+        for (const d of yearEntry.detail || []) {
+          futurePickAssetRows.push({
+            draft_year: yearEntry.year, round: d.round,
+            original_franchise_id: franchiseIdByFantraxTeamId[d.from] || currentFranchiseId,
+            current_franchise_id: currentFranchiseId,
+            draft_pick_id: null, created_at: now,
+          });
+        }
+      }
+    }
+    await batchUpsert(db, 'draft_pick_assets', ['draft_year', 'round', 'original_franchise_id'], futurePickAssetRows, ['created_at', 'draft_pick_id']);
+
+    // ================================ draft results =============================
+    if (draftData) {
+      const order = draftData.fantasyTeamsOrdered || [];
+      const slotsPerRound = order.length || fxTeams.length;
+      const picksOrdered = draftData.draftPicksOrdered || [];
+      const rounds = picksOrdered.reduce((max, p) => Math.max(max, p.round), 0);
+      const allDrafted = picksOrdered.length > 0 && picksOrdered.every((p) => p.scorerId);
+      const anyDrafted = picksOrdered.some((p) => p.scorerId);
+
+      const [draftClassId] = await batchUpsert(db, 'draft_classes', ['season_id'], [{
+        season_id: seasonId, draft_type: 'rookie', rounds, slots_per_round: slotsPerRound,
+        status: allDrafted ? 'complete' : anyDrafted ? 'in_progress' : 'scheduled',
+        completed_at: null,
+      }]);
+
+      const franchiseIdBySlot = {};
+      const draftOrderRows = [];
+      for (let i = 0; i < order.length; i++) {
+        const slot = i + 1;
+        const teamId = teamIdByFantraxId[order[i].id];
+        if (!teamId) continue;
+        draftOrderRows.push({ draft_class_id: draftClassId, slot, team_id: teamId });
+        franchiseIdBySlot[slot] = franchiseIdByFantraxTeamId[order[i].id];
+      }
+      await batchUpsert(db, 'draft_order', ['draft_class_id', 'slot'], draftOrderRows);
+
+      const draftPickRows = [];
+      for (const p of picksOrdered) {
+        const teamId = teamIdByFantraxId[p.teamId];
+        if (!teamId) { warnings.push(`draft pick R${p.round} slot ${p.pickNumber}: unknown team ${p.teamId}`); continue; }
+        const overallPick = slotsPerRound ? (p.round - 1) * slotsPerRound + p.pickNumber : p.pickNumber;
+        draftPickRows.push({
+          draft_class_id: draftClassId, round: p.round, slot: p.pickNumber,
+          overall_pick: overallPick, team_id: teamId,
+          player_id: p.scorerId ? playerIdByScorerId.get(String(p.scorerId)) ?? null : null,
+          drafted_at: null,
+        });
+      }
+      const draftPickIds = await batchUpsert(db, 'draft_picks', ['draft_class_id', 'round', 'slot'], draftPickRows);
+
+      const pickAssetRows = [];
+      draftPickRows.forEach((row, i) => {
+        const originalFranchiseId = franchiseIdBySlot[row.slot];
+        if (!originalFranchiseId) return;
+        pickAssetRows.push({
+          draft_year: year, round: row.round, original_franchise_id: originalFranchiseId,
+          current_franchise_id: franchiseIdByTeamId[row.team_id] || originalFranchiseId,
+          draft_pick_id: draftPickIds[i], created_at: now,
+        });
+      });
+      await batchUpsert(db, 'draft_pick_assets', ['draft_year', 'round', 'original_franchise_id'], pickAssetRows, ['created_at']);
+    }
+
+    // =================================== trades =================================
+    // Preload lookups needed to resolve trade legs without a per-leg SELECT:
+    // every (year, slot) -> original franchise (across ALL seasons imported so
+    // far, not just this one), and every known player (globally, since a
+    // traded player may not be on any current roster or this season's draft).
+    const allPlayers = await all(db, 'SELECT id, fantrax_scorer_id, full_name, nba_team FROM players');
+    const globalPlayerIdByScorerId = new Map(allPlayers.filter((p) => p.fantrax_scorer_id).map((p) => [p.fantrax_scorer_id, p.id]));
+    for (const [scorerId, id] of playerIdByScorerId) globalPlayerIdByScorerId.set(scorerId, id);
+
+    const slotFranchiseRows = await all(
+      db,
+      `SELECT s.year, do.slot, f.id as franchise_id
+       FROM draft_order do
+       JOIN draft_classes dc ON dc.id = do.draft_class_id
+       JOIN seasons s ON s.id = dc.season_id
+       JOIN teams t ON t.id = do.team_id
+       JOIN franchises f ON f.id = t.franchise_id`
+    );
+    const franchiseIdByYearSlot = new Map(slotFranchiseRows.map((r) => [`${r.year}-${r.slot}`, r.franchise_id]));
+
+    const tradeRowsToUpsert = trades.map((trade) => {
       const tradedAtMs = trade.date ? Date.parse(trade.date) : NaN;
-      const tradeId = await upsert(
-        db, 'trades', ['fantrax_tx_set_id'],
-        {
-          season_id: seasonId, fantrax_tx_set_id: String(trade.id),
-          traded_at: Number.isFinite(tradedAtMs) ? tradedAtMs : now,
-          week: trade.week != null ? parseInt(trade.week, 10) : null,
-          notes: null, created_at: now,
-        },
-        ['created_at']
-      );
+      return {
+        season_id: seasonId, fantrax_tx_set_id: String(trade.id),
+        traded_at: Number.isFinite(tradedAtMs) ? tradedAtMs : now,
+        week: trade.week != null ? parseInt(trade.week, 10) : null,
+        notes: null, created_at: now,
+      };
+    });
+    const tradeIds = await batchUpsert(db, 'trades', ['fantrax_tx_set_id'], tradeRowsToUpsert, ['created_at']);
 
-      // Legs have no independent natural identity beyond "this trade's set of
-      // moves" -- replace wholesale rather than upsert leg-by-leg.
-      await run(db, 'DELETE FROM trade_legs WHERE trade_id = ?', tradeId);
+    if (tradeIds.length) {
+      await run(db, `DELETE FROM trade_legs WHERE trade_id IN (${tradeIds.map(() => '?').join(',')})`, ...tradeIds);
+    }
 
+    // Resolve every leg in memory first (may need to create new draft_pick_assets
+    // for picks whose season hasn't been imported yet -- batched at the end).
+    const newPickAssetRows = [];
+    const resolvedLegs = []; // { tradeId, fromTeamId, toTeamId, assetType, playerId, pickAssetKey }
+    for (let ti = 0; ti < trades.length; ti++) {
+      const trade = trades[ti];
+      const tradeId = tradeIds[ti];
       for (const leg of trade.legs) {
         const fromTeamId = teamIdByFantraxId[leg.fromId];
         const toTeamId = teamIdByFantraxId[leg.toId];
@@ -362,63 +405,56 @@ export async function onRequestPost(context) {
         const asset = leg.asset;
 
         if (asset.kind === 'player') {
-          let playerId = await findPlayerByScorerId(db, asset.scorerId);
+          let playerId = asset.scorerId ? globalPlayerIdByScorerId.get(String(asset.scorerId)) : null;
           if (!playerId) {
-            const row = await first(
-              db, 'SELECT id FROM players WHERE full_name = ? AND (nba_team = ? OR ? IS NULL) LIMIT 1',
-              asset.name, asset.nbaTeam, asset.nbaTeam
-            );
-            playerId = row?.id ?? null;
+            const match = allPlayers.find((p) => p.full_name === asset.name && (!asset.nbaTeam || p.nba_team === asset.nbaTeam));
+            playerId = match?.id ?? null;
           }
           if (!playerId) { warnings.push(`trade ${trade.id}: could not resolve player "${asset.name}"`); continue; }
-          await run(
-            db,
-            `INSERT INTO trade_legs (trade_id, from_team_id, to_team_id, asset_type, player_id, draft_pick_asset_id)
-             VALUES (?, ?, ?, 'player', ?, NULL) ON CONFLICT DO NOTHING`,
-            tradeId, fromTeamId, toTeamId, playerId
-          );
+          resolvedLegs.push({ tradeId, fromTeamId, toTeamId, assetType: 'player', playerId });
         } else if (asset.kind === 'pick' && asset.round != null && asset.year != null) {
-          let originalFranchiseId = null;
-          if (asset.pick != null) {
-            const row = await first(
-              db,
-              `SELECT f.id FROM draft_order do
-               JOIN draft_classes dc ON dc.id = do.draft_class_id
-               JOIN seasons s ON s.id = dc.season_id
-               JOIN teams t ON t.id = do.team_id
-               JOIN franchises f ON f.id = t.franchise_id
-               WHERE s.year = ? AND do.slot = ?`,
-              asset.year, asset.pick
-            );
-            originalFranchiseId = row?.id ?? null;
-          } else if (asset.origTeamName) {
-            originalFranchiseId = (await resolveFranchise(db, asset.origTeamName)).franchiseId;
+          let originalFranchiseId = asset.pick != null ? franchiseIdByYearSlot.get(`${asset.year}-${asset.pick}`) ?? null : null;
+          if (originalFranchiseId == null && asset.origTeamName) {
+            originalFranchiseId = matchFranchise(franchiseCandidates.concat(
+              newFranchiseTeams.map((t, i) => ({ id: newFranchiseIds[i], name: t.name }))
+            ), asset.origTeamName);
           }
           if (!originalFranchiseId) {
             warnings.push(`trade ${trade.id}: could not place pick (year ${asset.year}, round ${asset.round}) -- reconcile on a later re-import`);
             continue;
           }
-
-          const toTeamRow = await first(db, 'SELECT franchise_id FROM teams WHERE id = ?', toTeamId);
-          const pickAssetId = await upsert(
-            db, 'draft_pick_assets', ['draft_year', 'round', 'original_franchise_id'],
-            {
+          const key = `${asset.year}-${asset.round}-${originalFranchiseId}`;
+          if (!newPickAssetRows.find((r) => r.__key === key)) {
+            newPickAssetRows.push({
+              __key: key,
               draft_year: asset.year, round: asset.round, original_franchise_id: originalFranchiseId,
-              current_franchise_id: toTeamRow?.franchise_id ?? originalFranchiseId,
+              current_franchise_id: franchiseIdByTeamId[toTeamId] || originalFranchiseId,
               draft_pick_id: null, created_at: now,
-            },
-            ['created_at', 'draft_pick_id']
-          );
-
-          await run(
-            db,
-            `INSERT INTO trade_legs (trade_id, from_team_id, to_team_id, asset_type, player_id, draft_pick_asset_id)
-             VALUES (?, ?, ?, 'pick', NULL, ?) ON CONFLICT DO NOTHING`,
-            tradeId, fromTeamId, toTeamId, pickAssetId
-          );
+            });
+          }
+          resolvedLegs.push({ tradeId, fromTeamId, toTeamId, assetType: 'pick', pickAssetKey: key });
         }
       }
     }
+
+    let pickAssetIdByKey = new Map();
+    if (newPickAssetRows.length) {
+      const rows = newPickAssetRows.map(({ __key, ...rest }) => rest);
+      const ids = await batchUpsert(db, 'draft_pick_assets', ['draft_year', 'round', 'original_franchise_id'], rows, ['created_at', 'draft_pick_id']);
+      pickAssetIdByKey = new Map(newPickAssetRows.map((r, i) => [r.__key, ids[i]]));
+    }
+
+    const legParams = resolvedLegs.map((leg) => [
+      leg.tradeId, leg.fromTeamId, leg.toTeamId, leg.assetType,
+      leg.assetType === 'player' ? leg.playerId : null,
+      leg.assetType === 'pick' ? pickAssetIdByKey.get(leg.pickAssetKey) : null,
+    ]);
+    await batchRun(
+      db,
+      `INSERT INTO trade_legs (trade_id, from_team_id, to_team_id, asset_type, player_id, draft_pick_asset_id)
+       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+      legParams
+    );
 
     return json({
       ok: true, season: fantraxLeagueId, seasonId, year,
