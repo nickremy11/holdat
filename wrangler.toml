@@ -7,3 +7,13 @@ pages_build_output_dir = "."
 [[kv_namespaces]]
 binding = "BBM_KV"
 id = "578e66a3b0b8433dba0384469aa9dedd"
+
+# Native data store for Phase 1: auth, leagues/seasons, franchises/teams, players,
+# rosters, draft, trades. Populated by the one-time Fantrax importer
+# (functions/api/admin/import.js); Fantrax itself stays scraped only as that
+# importer's source, not as a live dependency.
+[[d1_databases]]
+binding = "DB"
+database_name = "holdat"
+database_id = "cc6fe84c-95e2-44df-b681-81e5863d8464"
+migrations_dir = "./migrations"

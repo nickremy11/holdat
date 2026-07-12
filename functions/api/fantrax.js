@@ -15,9 +15,10 @@ const FX_URL = 'https://www.fantrax.com/fxpa/req';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // 9-cat scoring categories we care about, by Fantrax column shortName.
-const CATS = ['FG%', '3PTM', 'FT%', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO'];
+// Exported: reused by functions/api/admin/import.js to seed scoring_categories.
+export const CATS = ['FG%', '3PTM', 'FT%', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO'];
 // Categories where a LOWER value is better (only turnovers here).
-const LOWER_BETTER = new Set(['TO']);
+export const LOWER_BETTER = new Set(['TO']);
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,7 +31,9 @@ function json(body, status = 200) {
   });
 }
 
-async function fxReq(method, data, cookie) {
+// Exported: functions/api/admin/import.js reuses this to talk to Fantrax
+// rather than duplicating the request/error-envelope handling.
+export async function fxReq(method, data, cookie) {
   const res = await fetch(`${FX_URL}?leagueId=${encodeURIComponent(data.leagueId)}`, {
     method: 'POST',
     headers: {
@@ -64,8 +67,9 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Parse one team's getTeamRosterInfo into { players:[...], picks:[...] }
-function parseRoster(data) {
+// Exported: reused by the importer (same shape it already reads for the
+// live-viewer pages).
+export function parseRoster(data) {
   const out = { players: [], picks: [] };
   if (!data) return out;
 
@@ -133,7 +137,9 @@ function parseRoster(data) {
 // txSetId belong to the same trade. Assets are either a player (row.scorer) or a
 // draft pick (row.draftPickDisplayParts — HTML-ish "Round <b>1</b> Pick <b>1</b>" /
 // "<b>2026</b> Draft Pick", parsed with regex since Fantrax doesn't give it structured here).
-function parsePickLabel(dp) {
+// Exported: the importer resolves trade-leg picks against draft_pick_assets
+// using this same label parsing.
+export function parsePickLabel(dp) {
   const strip = (s) => stripTags(s || '');
   const roundInfo = strip(dp.roundInfo);
   const year = (strip(dp.year).match(/\d{4}/) || [])[0] || null;
@@ -156,7 +162,9 @@ function parsePickLabel(dp) {
 // rookie draft is labeled by the calendar year it happens in (e.g. the 26-27 league's
 // draft is "2026"). Confirmed empirically: 24-25 league's draft picks are dated 2024,
 // 25-26 league's are dated 2025, etc. Extend this map when a new season league is added.
-const YEAR_TO_LEAGUE = {
+// Exported: the importer needs the reverse (leagueId -> year) too, derived
+// from this same map, to avoid a second hardcoded source of truth.
+export const YEAR_TO_LEAGUE = {
   2023: 'qybhh93dlge64jyi', // 23-24 season league — 22-round startup draft
   2024: 'uxe3kqislwu07xfm', // 24-25 season league
   2025: 'zdmn1wu0md6fpz8d', // 25-26 season league
@@ -222,7 +230,8 @@ async function resolveDraftedPicks(trades, cookie) {
   }
 }
 
-function parseTrades(rows) {
+// Exported: the importer upserts trades/trade_legs from this same parsed shape.
+export function parseTrades(rows) {
   const groups = new Map();
   for (const row of rows) {
     if (!row.txSetId) continue;
@@ -250,6 +259,10 @@ function parseTrades(rows) {
         asset = {
           kind: 'player', name: sc.name, pos: sc.posShortNames || '',
           nbaTeam: sc.teamShortName || null, headshot: sc.headshotUrl || null,
+          // scorerId presence on trade-row scorers is unconfirmed (roster rows
+          // definitely have it) -- the importer falls back to name+pos+team
+          // matching when this is null. See holdat's Phase 1 plan, open question 3.
+          scorerId: sc.scorerId || null,
         };
       } else if (row.draftPickDisplayParts) {
         const p = parsePickLabel(row.draftPickDisplayParts);

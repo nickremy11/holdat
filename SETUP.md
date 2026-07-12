@@ -1,11 +1,14 @@
 # Holdat — Dynasty NBA viewer
 
 A multi-page static site + Cloudflare Pages Functions that read a Fantrax dynasty
-NBA league. Two pages, linked via the top nav: **`/`** (every team as a card with
+NBA league. Two pages, linked via the top nav: **`/`** (per-season team cards with
 Overall / Contender / Draft ranks, a 9-category strip, and an expandable roster
-grouped by G / G/F / F / F/C / C) and **`/trades`** (every executed trade, grouped
-by side, with full player + draft-pick returns). A **`/history`** page (league
-history — champions, standings-by-season, etc.) is planned next.
+grouped by G / G/F / F / F/C / C — one season at a time, picked via the league
+dropdown) and **`/trades`** (every executed trade **across all seasons**, merged
+into one timeline with a year divider whenever the year changes, plus a team
+filter — `/trades?team=Name` deep-links to a specific team's trades). A
+**`/history`** page (league history — champions, standings-by-season, etc.) is
+planned next.
 
 Hosted at **holdat.ffhistorian.com** (Cloudflare Pages). No build step — Cloudflare
 Pages serves `foo.html` for a request to `/foo` automatically (same "clean URL"
@@ -22,8 +25,78 @@ holdat/
 ├── functions/api/bbm.js       # Pages Function — scrapes Basketball Monster "BZ" (Bazemore) values
 ├── wrangler.toml              # Pages config (pages_build_output_dir = ".")
 ├── .dev.vars                  # local-only cookies, FANTRAX_COOKIE + BBM_COOKIE (gitignored)
+├── functions/_lib/            # db.js (D1 helpers), auth.js (sessions), email.js (magic-link sender)
+├── functions/api/auth/        # request-link, verify, logout, me — magic-link login
+├── functions/api/admin/       # import.js (Fantrax -> D1), import-player-universe.js (NBA.com -> D1)
+├── migrations/                # D1 schema, applied via `wrangler d1 migrations apply`
+├── _redirects                 # path-based routing: /[season-slug]/[team-slug] -> index.html
 └── SETUP.md
 ```
+
+## Phase 1: native data model (D1), auth, and the Fantrax importer
+
+`holdat` is moving from a read-only Fantrax viewer to owning rosters, lineups,
+trades, and drafts natively. Fantrax stays scraped only as a one-time/occasional
+importer source (`functions/api/admin/import.js`), not a live dependency.
+
+### One-time setup
+
+```bash
+# 1. Create the D1 database and wire the binding into wrangler.toml
+#    (the [[d1_databases]] block is already there with a placeholder
+#    database_id — replace it with the id this command prints)
+npx wrangler d1 create holdat
+
+# 2. Apply the schema
+npx wrangler d1 migrations apply holdat --local     # for `wrangler pages dev`
+npx wrangler d1 migrations apply holdat --remote    # for production
+
+# 3. New secrets
+npx wrangler pages secret put ADMIN_IMPORT_TOKEN     # gates /api/admin/*
+npx wrangler pages secret put RESEND_API_KEY         # from resend.com/api-keys
+# EMAIL_FROM is non-secret config — add as a [vars] entry in wrangler.toml,
+# or as a plain secret, whichever this project ends up using
+```
+
+Email is sent via [Resend](https://resend.com) rather than Cloudflare's own
+Email Sending API — that needs a Workers Paid plan to send to arbitrary
+recipients, which this project doesn't have. Resend's free tier (3,000
+emails/mo) has no such dependency. One-time setup at resend.com:
+1. Create a free account.
+2. Add the sending domain (e.g. `ffhistorian.com`) and add the DNS records
+   Resend gives you (SPF/DKIM) at your domain registrar/DNS host.
+3. Create an API key, use it as `RESEND_API_KEY`.
+
+If this needs to change providers again later, `functions/_lib/email.js` is
+the only file that talks to the provider.
+
+Locally, `ADMIN_IMPORT_TOKEN` / `RESEND_API_KEY` / `EMAIL_FROM` already have
+placeholder entries in `.dev.vars` (gitignored) — fill in a real
+`RESEND_API_KEY` there to test the login-link email locally.
+
+### Running the importer
+
+Oldest season first, so each season's draft order exists before later trades
+reference its picks (safe to re-run all of them afterward in any order — every
+write is a natural-key upsert):
+
+```bash
+# Dry run first — review the proposed team -> franchise mapping before writing anything
+curl -X POST "http://localhost:8788/api/admin/import?season=qybhh93dlge64jyi&year=2023&label=23-24&slug=league2324&dryRun=1&token=$ADMIN_IMPORT_TOKEN"
+
+# Then for real, oldest -> newest, marking only the active season current=1
+curl -X POST ".../api/admin/import?season=qybhh93dlge64jyi&year=2023&label=23-24&slug=league2324&token=..."
+curl -X POST ".../api/admin/import?season=uxe3kqislwu07xfm&year=2024&label=24-25&slug=league2425&token=..."
+curl -X POST ".../api/admin/import?season=zdmn1wu0md6fpz8d&year=2025&label=25-26&slug=league2526&token=..."
+curl -X POST ".../api/admin/import?season=mkuoaxbhmqrct7rf&year=2026&label=26-27&slug=league2627&current=1&token=..."
+
+# Once: full NBA + two-way player universe for free-agent search (source: NBA.com, free)
+curl "http://localhost:8788/api/admin/import-player-universe?token=$ADMIN_IMPORT_TOKEN"
+```
+
+`index.html`/`trades.html` keep reading live from Fantrax through Phase 1 —
+they don't switch to D1 until the write endpoints (lineups/trades) that make
+D1 authoritative for that data ship in a later phase.
 
 Each page is self-contained (own `<style>` block, own load()) but shares `shared.js`
 for the league list and small helpers, so adding a season only means editing one
@@ -70,7 +143,11 @@ it is never sent to the browser.
 
 Methods used: `getFantasyTeams`, `getStandings`, `getTeamRosterInfo` (per team),
 `getDraftResults` (draft slots), `getTransactionDetailsHistory` (trade history —
-`?type=trades`, fetched only by `/trades`, not by the Rosters page).
+`?type=trades`, fetched only by `/trades`, not by the Rosters page). `/trades`
+calls `?type=trades` (and `?type=teams`, for logos) **once per league in
+`LEAGUES`**, in parallel, then merges + sorts the results client-side — so it
+always shows the full multi-season history regardless of which single league the
+Rosters page has selected.
 
 ### Trade History resolves "who was drafted" for traded picks
 
