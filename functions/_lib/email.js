@@ -33,3 +33,31 @@ export async function sendMagicLinkEmail(env, toEmail, link) {
     throw new Error(`EMAIL_SEND_FAILED: ${res.status} ${body}`);
   }
 }
+
+// Sends a commissioner-issued franchise-claim invite. Same Resend call shape
+// as sendMagicLinkEmail, different (longer-lived, one-time) content.
+export async function sendInviteEmail(env, toEmail, link, franchiseName) {
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
+    throw new Error('EMAIL_NOT_CONFIGURED');
+  }
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      to: toEmail,
+      from: env.EMAIL_FROM,
+      subject: `You've been invited to claim ${franchiseName} on Holdat`,
+      html: `<p>You've been invited to claim <strong>${franchiseName}</strong> in the Holdat league. Click below to set up your account. This link expires in 7 days.</p><p><a href="${link}">${link}</a></p>`,
+      text: `You've been invited to claim ${franchiseName} in the Holdat league. Set up your account (expires in 7 days): ${link}`,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`EMAIL_SEND_FAILED: ${res.status} ${body}`);
+  }
+}

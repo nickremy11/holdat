@@ -43,7 +43,10 @@ export async function onRequestPost(context) {
     }
   } catch (e) {
     // Swallowed deliberately: this endpoint's response never reveals whether
-    // the email matched or whether sending succeeded.
+    // the email matched or whether sending succeeded. Logged server-side only
+    // (e.g. a stale RESEND_API_KEY fails silently otherwise, with no trace
+    // anywhere) so real send failures are still debuggable via wrangler/CF logs.
+    console.error('request-link failed:', e);
   }
 
   return json({ ok: true });

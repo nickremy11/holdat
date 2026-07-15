@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Holdat — Commissioner</title>
+<link rel="icon" type="image/png" href="assets/hype.png" />
+<style>
+  :root {
+    --bg: #16181c;
+    --asphalt: #1c1f24;
+    --card: #1b1f27;
+    --card2: #20242d;
+    --line: #2c313b;
+    --ink: #e8eaed;
+    --ink2: #9aa3af;
+    --ink3: #6b7280;
+    --orange: #ff6b35;
+    --teal: #2dd4bf;
+    --gold: #f2c14e;
+    --court: rgba(245,225,200,.10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 28px 20px 80px; }
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand .logo-img {
+    height: 60px; width: 60px; border-radius: 13px; object-fit: cover; display: block;
+    border: 1px solid var(--line);
+    box-shadow: 0 0 22px rgba(255,107,53,.28);
+  }
+  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .controls { display: flex; gap: 10px; align-items: center; }
+  .auth-nav { font-size: 13px; color: var(--ink2); white-space: nowrap; }
+  .auth-nav a { color: var(--orange); text-decoration: none; font-weight: 700; }
+  .auth-nav a:hover { text-decoration: underline; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  p.hint { color: var(--ink2); font-size: 13px; margin-bottom: 20px; }
+  .msg { text-align: center; color: var(--ink2); padding: 60px 20px; font-size: 15px; font-weight: 600; }
+  .msg.err { color: #ff8a8a; }
+  .grid { display: flex; flex-direction: column; gap: 10px; }
+  .row {
+    background: linear-gradient(180deg, var(--card2), var(--card));
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .row .fname { font-weight: 800; font-size: 14px; min-width: 180px; flex: 1 1 auto; }
+  .row .owned { color: var(--teal); font-size: 12.5px; font-weight: 600; }
+  .row .owned .em { color: var(--ink3); font-weight: 500; }
+  .row form { display: flex; gap: 8px; align-items: center; flex: none; }
+  .row input[type=email] {
+    background: var(--asphalt); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; font-size: 13px; width: 220px;
+  }
+  .row input:focus { outline: none; border-color: var(--orange); }
+  .row button {
+    background: var(--orange); color: #1a1208; border: none;
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .row button:hover { filter: brightness(1.08); }
+  .row button:disabled { opacity: .6; cursor: default; }
+  .row .status { font-size: 12px; font-weight: 600; }
+  .row .status.ok { color: var(--teal); }
+  .row .status.err { color: #ff8a8a; }
+  .row .change-link { font-size: 12px; color: var(--ink3); cursor: pointer; text-decoration: underline; flex: none; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <img class="logo-img" src="assets/hype.png" alt="Holdat — The Dynasty Begins">
+        <span class="sub">Commissioner</span>
+      </div>
+      <div class="controls">
+        <span class="auth-nav" id="authNav"></span>
+      </div>
+    </header>
+    <h1>Franchises</h1>
+    <p class="hint">Invite an owner by email for any unclaimed team, or re-invite to fix a wrong claim.</p>
+    <div id="app"><div class="msg">Loading…</div></div>
+  </div>
+
+<script src="shared.js"></script>
+<script>
+function rowHtml(f) {
+  const owned = !!f.email;
+  const ownedBlock = owned
+    ? `<span class="owned">${esc(f.display_name)} <span class="em">(${esc(f.email)})</span></span>
+       <span class="change-link" data-id="${f.id}">change</span>`
+    : '';
+  const formHtml = `
+    <form data-id="${f.id}" ${owned ? 'style="display:none"' : ''}>
+      <input type="email" placeholder="owner@example.com" required />
+      <button type="submit">Invite</button>
+      <span class="status"></span>
+    </form>`;
+  return `<div class="row" data-row="${f.id}">
+    <span class="fname">${esc(f.name)}</span>
+    ${ownedBlock}
+    ${formHtml}
+  </div>`;
+}
+
+function wireRow(row) {
+  const changeLink = $('.change-link', row);
+  if (changeLink) {
+    changeLink.onclick = () => {
+      $('.owned', row).style.display = 'none';
+      changeLink.style.display = 'none';
+      $('form', row).style.display = 'flex';
+    };
+  }
+  $('form', row).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const franchiseId = parseInt(form.dataset.id, 10);
+    const email = $('input[type=email]', form).value.trim();
+    const btn = $('button', form);
+    const status = $('.status', form);
+    btn.disabled = true;
+    status.className = 'status';
+    status.textContent = 'Sending…';
+    try {
+      const res = await fetch(`/api/commissioner/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ franchiseId, email }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || 'Failed to send invite.');
+      status.className = 'status ok';
+      status.textContent = `Invite sent to ${email}`;
+      btn.disabled = false;
+    } catch (err) {
+      status.className = 'status err';
+      status.textContent = err.message;
+      btn.disabled = false;
+    }
+  });
+}
+
+async function load() {
+  setupAuthNav();
+
+  let session = null;
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) session = await res.json();
+  } catch {}
+
+  if (!session) { location.href = '/login'; return; }
+  if (!session.user.isCommissioner) {
+    $('#app').innerHTML = `<div class="msg err">Commissioners only.</div>`;
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/commissioner/franchises');
+    if (!res.ok) throw new Error();
+    const { franchises } = await res.json();
+    $('#app').innerHTML = `<div class="grid">${franchises.map(rowHtml).join('')}</div>`;
+    document.querySelectorAll('.row').forEach(wireRow);
+  } catch {
+    $('#app').innerHTML = `<div class="msg err">Failed to load franchises.</div>`;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Holdat — Log in</title>
+<link rel="icon" type="image/png" href="assets/hype.png" />
+<style>
+  :root {
+    --bg: #16181c;
+    --asphalt: #1c1f24;
+    --card: #1b1f27;
+    --card2: #20242d;
+    --line: #2c313b;
+    --ink: #e8eaed;
+    --ink2: #9aa3af;
+    --ink3: #6b7280;
+    --orange: #ff6b35;
+    --teal: #2dd4bf;
+    --gold: #f2c14e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(130% 90% at 50% -5%, #2b2622 0%, #221f1c 40%, #141312 100%);
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wrap { width: 100%; max-width: 380px; padding: 20px; }
+  .brand { display: flex; align-items: center; gap: 14px; justify-content: center; margin-bottom: 28px; }
+  .brand .logo-img {
+    height: 60px; width: 60px; border-radius: 13px; object-fit: cover; display: block;
+    border: 1px solid var(--line);
+    box-shadow: 0 0 22px rgba(255,107,53,.28);
+  }
+  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .card {
+    background: linear-gradient(180deg, var(--card2), var(--card));
+    border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 6px 22px rgba(0,0,0,.3);
+    padding: 24px;
+  }
+  .card h1 { font-size: 18px; margin-bottom: 6px; }
+  .card p.hint { color: var(--ink2); font-size: 13px; margin-bottom: 18px; }
+  .banner {
+    background: rgba(255,138,138,.1); border: 1px solid rgba(255,138,138,.3); color: #ff8a8a;
+    border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 16px;
+  }
+  .banner.ok {
+    background: rgba(45,212,191,.1); border-color: rgba(45,212,191,.3); color: var(--teal);
+  }
+  input[type=email] {
+    width: 100%; background: var(--asphalt); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 13px; font-size: 14px; margin-bottom: 14px;
+  }
+  input[type=email]:focus { outline: none; border-color: var(--orange); }
+  button {
+    width: 100%; background: var(--orange); color: #1a1208; border: none;
+    border-radius: 10px; padding: 11px 13px; font-size: 14px; font-weight: 700;
+    cursor: pointer; letter-spacing: .3px;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .6; cursor: default; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <img class="logo-img" src="assets/hype.png" alt="Holdat — The Dynasty Begins">
+      <span class="sub">HOLDAT</span>
+    </div>
+    <div class="card">
+      <h1>Log in</h1>
+      <p class="hint">Enter your email and we'll send you a login link.</p>
+      <div id="banner"></div>
+      <form id="loginForm">
+        <input type="email" id="email" placeholder="you@example.com" required autocomplete="email" />
+        <button type="submit" id="submitBtn">Send login link</button>
+      </form>
+    </div>
+  </div>
+
+<script src="shared.js"></script>
+<script>
+(async () => {
+  // Already logged in? Skip the form entirely.
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) { location.href = '/'; return; }
+  } catch {}
+
+  if (qparam('error') === 'expired') {
+    $('#banner').innerHTML = `<div class="banner">That link expired or was already used — request a new one.</div>`;
+  }
+})();
+
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = $('#email').value.trim();
+  if (!email) return;
+  const btn = $('#submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    await fetch('/api/auth/request-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  } catch {}
+  $('#banner').innerHTML = `<div class="banner ok">Check your email for a login link (expires in 15 minutes).</div>`;
+  btn.textContent = 'Link sent';
+});
+</script>
+</body>
+</html>

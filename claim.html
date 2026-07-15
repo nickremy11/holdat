@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Holdat — Claim your team</title>
+<link rel="icon" type="image/png" href="assets/hype.png" />
+<style>
+  :root {
+    --bg: #16181c;
+    --asphalt: #1c1f24;
+    --card: #1b1f27;
+    --card2: #20242d;
+    --line: #2c313b;
+    --ink: #e8eaed;
+    --ink2: #9aa3af;
+    --ink3: #6b7280;
+    --orange: #ff6b35;
+    --teal: #2dd4bf;
+    --gold: #f2c14e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(130% 90% at 50% -5%, #2b2622 0%, #221f1c 40%, #141312 100%);
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wrap { width: 100%; max-width: 380px; padding: 20px; }
+  .brand { display: flex; align-items: center; gap: 14px; justify-content: center; margin-bottom: 28px; }
+  .brand .logo-img {
+    height: 60px; width: 60px; border-radius: 13px; object-fit: cover; display: block;
+    border: 1px solid var(--line);
+    box-shadow: 0 0 22px rgba(255,107,53,.28);
+  }
+  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .card {
+    background: linear-gradient(180deg, var(--card2), var(--card));
+    border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 6px 22px rgba(0,0,0,.3);
+    padding: 24px;
+  }
+  .card h1 { font-size: 18px; margin-bottom: 6px; }
+  .card p.hint { color: var(--ink2); font-size: 13px; margin-bottom: 18px; }
+  .card p.hint strong { color: var(--ink); }
+  .banner {
+    background: rgba(255,138,138,.1); border: 1px solid rgba(255,138,138,.3); color: #ff8a8a;
+    border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 16px;
+  }
+  label { display: block; font-size: 12px; color: var(--ink2); font-weight: 700; margin-bottom: 6px; letter-spacing: .3px; text-transform: uppercase; }
+  input[type=text], input[type=email] {
+    width: 100%; background: var(--asphalt); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 13px; font-size: 14px; margin-bottom: 14px;
+  }
+  input:disabled { color: var(--ink3); }
+  input:focus { outline: none; border-color: var(--orange); }
+  button {
+    width: 100%; background: var(--orange); color: #1a1208; border: none;
+    border-radius: 10px; padding: 11px 13px; font-size: 14px; font-weight: 700;
+    cursor: pointer; letter-spacing: .3px;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .6; cursor: default; }
+  .msg { text-align: center; color: var(--ink2); padding: 20px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <img class="logo-img" src="assets/hype.png" alt="Holdat — The Dynasty Begins">
+      <span class="sub">HOLDAT</span>
+    </div>
+    <div class="card" id="card">
+      <div class="msg">Loading invite…</div>
+    </div>
+  </div>
+
+<script src="shared.js"></script>
+<script>
+const token = qparam('token');
+const card = $('#card');
+
+function showError(message) {
+  card.innerHTML = `<h1>Claim your team</h1><div class="banner">${esc(message)}</div>`;
+}
+
+(async () => {
+  if (!token) return showError('Missing invite link.');
+
+  let info;
+  try {
+    const res = await fetch(`/api/auth/invite-info?token=${encodeURIComponent(token)}`);
+    if (!res.ok) throw new Error();
+    info = await res.json();
+  } catch {
+    return showError('This invite link is invalid or has expired.');
+  }
+
+  card.innerHTML = `
+    <h1>Claim your team</h1>
+    <p class="hint">You're claiming <strong>${esc(info.franchiseName)}</strong>.</p>
+    <form id="claimForm">
+      <label>Email</label>
+      <input type="email" value="${esc(info.email)}" disabled />
+      <label>Display name</label>
+      <input type="text" id="displayName" placeholder="Your name" required autocomplete="name" />
+      <button type="submit" id="submitBtn">Claim your team</button>
+    </form>
+  `;
+
+  $('#claimForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const displayName = $('#displayName').value.trim();
+    if (!displayName) return;
+    const btn = $('#submitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Claiming…';
+    try {
+      const res = await fetch('/api/auth/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, displayName }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Something went wrong.');
+      }
+      location.href = '/';
+    } catch (err) {
+      showError(err.message);
+    }
+  });
+})();
+</script>
+</body>
+</html>

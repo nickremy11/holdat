@@ -15,7 +15,7 @@ export async function onRequestGet(context) {
 
   const sessionToken = await consumeMagicLinkToken(env.DB, token);
   if (!sessionToken) {
-    return json({ error: 'This login link is invalid or has expired.', code: 'INVALID_TOKEN' }, 401);
+    return new Response(null, { status: 302, headers: { Location: '/login?error=expired' } });
   }
 
   return new Response(null, {

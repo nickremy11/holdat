@@ -20,14 +20,18 @@ behavior used by the sibling `sleeper-helper` project's `/analyzer`).
 holdat/
 ├── index.html                 # Rosters page ("/") — HTML + CSS + JS, no framework
 ├── trades.html                # Trade History page ("/trades") — same style, self-contained
-├── shared.js                  # LEAGUES list, esc/displayPos/curLeague, league-switcher — used by both pages
+├── login.html                 # Magic-link login page ("/login") — email in, "check your email" out
+├── claim.html                 # Franchise-invite claim page ("/claim?token=...") — set your name, get logged in
+├── commissioner.html          # Commissioner-only panel ("/commissioner") — invite owners per franchise
+├── shared.js                  # LEAGUES list, esc/displayPos/curLeague, league-switcher, setupAuthNav — used by all pages
 ├── functions/api/fantrax.js   # Pages Function — proxies Fantrax fxpa with stored cookie
 ├── functions/api/bbm.js       # Pages Function — scrapes Basketball Monster "BZ" (Bazemore) values
 ├── wrangler.toml              # Pages config (pages_build_output_dir = ".")
 ├── .dev.vars                  # local-only cookies, FANTRAX_COOKIE + BBM_COOKIE (gitignored)
-├── functions/_lib/            # db.js (D1 helpers), auth.js (sessions), email.js (magic-link sender)
-├── functions/api/auth/        # request-link, verify, logout, me — magic-link login
-├── functions/api/admin/       # import.js (Fantrax -> D1), import-player-universe.js (NBA.com -> D1)
+├── functions/_lib/            # db.js (D1 helpers), auth.js (sessions + createSession), email.js (magic-link + invite sender)
+├── functions/api/auth/        # request-link, verify, logout, me, invite-info, claim — login + invite-claim
+├── functions/api/commissioner/ # franchises.js, invite.js — session-gated, powers /commissioner
+├── functions/api/admin/       # import.js, import-player-universe.js, franchises.js, link-owner.js — curl/token-gated bootstrap
 ├── migrations/                # D1 schema, applied via `wrangler d1 migrations apply`
 ├── _redirects                 # currently a no-op — see "Current status" below
 └── SETUP.md
@@ -52,13 +56,25 @@ involved in what a visitor actually sees today.
   ```bash
   curl -X POST ".../api/admin/import?season=mkuoaxbhmqrct7rf&year=2026&label=26-27&slug=league2627&current=1&token=$ADMIN_IMPORT_TOKEN"
   ```
-- **Magic-link auth** (`/api/auth/request-link`, `verify`, `logout`, `me`) —
-  functional, but **zero owner accounts exist in production** (no `users`
-  rows, no `franchises.owner_user_id` linked), and there's **no `/login`
-  page** yet. Nothing user-facing uses this today.
+- **Magic-link auth is now live end-to-end**: `/login` page, `#authNav` in
+  the header of every page (shows "Log in", or "{name} · Commissioner ·
+  Log out" for the commissioner, wired via `shared.js`'s `setupAuthNav()`),
+  and `/api/auth/{request-link,verify,logout,me}`.
+- **Self-service franchise claiming**: `/commissioner` (commissioner-only
+  panel, session-gated via `functions/api/commissioner/{franchises,invite}.js`)
+  lets the commissioner invite an owner by email for any unclaimed (or
+  wrongly-claimed) franchise. The invitee gets an email with a `/claim?token=`
+  link (`claim.html` + `functions/api/auth/{invite-info,claim}.js`), sets
+  their display name, and is logged in immediately with their franchise
+  linked. **Zero accounts exist in production yet** — see "Bootstrapping the
+  commissioner" below for the one manual step every league needs before this
+  is usable.
 - **Admin import tools** (`functions/api/admin/import.js`,
-  `import-player-universe.js`) — one-time/occasional commissioner tools
-  gated by `ADMIN_IMPORT_TOKEN`, not end-user-facing.
+  `import-player-universe.js`, `franchises.js`, `link-owner.js`) —
+  one-time/occasional commissioner tools gated by `ADMIN_IMPORT_TOKEN`, not
+  end-user-facing. `franchises.js`/`link-owner.js` are now the **bootstrap
+  and escape-hatch** path (see below), not the primary way owners get
+  seeded — that's `/commissioner` now.
   **Lesson learned the hard way**: write every row through
   `functions/_lib/db.js`'s `batchUpsert`/`batchInsert`/`batchRun` (D1's
   `batch()` API), never one `await`-per-row `INSERT`/`UPDATE` — a season
@@ -67,19 +83,22 @@ involved in what a visitor actually sees today.
   under local `wrangler dev` (which doesn't enforce the limit) and then
   failed in production.
 
-**Not built at all**: no `/login` page, no commissioner tool to seed owner
-accounts or link them to franchises, no lineup/roster editing
-(`roster_entries.slot_id` is `NULL` for every player, `lineup_slots` has zero
-configured rows for any season, no write endpoint exists for it), no
-commissioner UI for roster rules (`season_settings` rows exist but every
-field is `NULL`).
+**Not built at all**: no lineup/roster editing (`roster_entries.slot_id` is
+`NULL` for every player, `lineup_slots` has zero configured rows for any
+season, no write endpoint exists for it), no commissioner UI for roster
+rules (`season_settings` rows exist but every field is `NULL`), no team
+pages beyond the current per-season cards on `/`, no live scoring (schema
+for `games`/`player_game_stats` exists but nothing polls or computes from it).
 
-**Next up**: `/login` page, a commissioner tool to seed the 14 owners and
-link each to their franchise, `lineup_slots`/`season_settings` configuration,
-and the actual lineup-editing UI/endpoint. `index.html` should keep reading
-live from Fantrax until lineup editing ships and makes D1 authoritative for
-roster state — switching sooner risks a Fantrax-side move silently going
-stale.
+**Next up** (in priority order): bootstrap the commissioner + invite the
+other 13 owners (below), then `lineup_slots`/`season_settings` configuration
++ the actual lineup-editing UI/endpoint (which will also need a "which
+team am I editing" switcher for the commissioner's already-built override —
+see `canActOnFranchise()` in `functions/_lib/auth.js`), then team pages, then
+live 9-cat head-to-head scoring polled from NBA/ESPN box scores every 20-30
+min during game windows. `index.html` should keep reading live from Fantrax
+until lineup editing ships and makes D1 authoritative for roster state —
+switching sooner risks a Fantrax-side move silently going stale.
 
 **`_redirects` note**: path-based season/team routing (`/league2627/[team]`)
 was tried and reverted — Cloudflare's redirect placeholders match *any*
@@ -137,6 +156,32 @@ curl -X POST ".../api/admin/import?season=mkuoaxbhmqrct7rf&year=2026&label=26-27
 # Once: full NBA + two-way player universe for free-agent search (source: NBA.com, free)
 curl ".../api/admin/import-player-universe?token=$ADMIN_IMPORT_TOKEN"
 ```
+
+### Bootstrapping the commissioner, then inviting everyone else
+
+Only the very first account needs a curl command — there's no one logged in
+yet to send themselves an invite from. Everyone after that goes through
+`/commissioner` in the browser.
+
+```bash
+# List all franchises + current owner-link status, to find your own franchiseId
+curl ".../api/admin/franchises?token=$ADMIN_IMPORT_TOKEN"
+
+# One-time: link your own account, with isCommissioner so /commissioner unlocks for you
+curl -X POST ".../api/admin/link-owner?token=$ADMIN_IMPORT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"franchiseId": 1, "email": "you@example.com", "displayName": "Your Name", "isCommissioner": true}'
+```
+
+Then: log in at `/login` with that email, visit `/commissioner`, and invite
+the other 13 owners by email — each gets a `/claim?token=...` link (7-day
+expiry) that sets their display name and logs them in immediately. Re-typing
+an email for an already-claimed franchise is fine and intentional — it's
+also how you fix a wrong claim, no separate tool needed.
+
+`admin/link-owner` (curl, `ADMIN_IMPORT_TOKEN`-gated) still works as an
+escape hatch afterward — e.g. if email delivery is broken for one owner and
+you need to link them directly.
 
 Each page is self-contained (own `<style>` block, own load()) but shares `shared.js`
 for the league list and small helpers, so adding a season only means editing one

@@ -56,6 +56,24 @@ export async function createMagicLinkToken(db, userId, requestIp) {
   return token;
 }
 
+// Creates a sessions row for userId, returns the raw (unhashed) session
+// token. Shared by consumeMagicLinkToken (below) and the invite-claim flow
+// (functions/api/auth/claim.js), which also needs a session the moment a
+// franchise invite is claimed.
+export async function createSession(db, userId) {
+  const now = Date.now();
+  const sessionToken = randomToken();
+  await run(
+    db,
+    'INSERT INTO sessions (user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)',
+    userId,
+    await hashToken(sessionToken),
+    now,
+    now + SESSION_TTL_MS
+  );
+  return sessionToken;
+}
+
 // Consumes a magic-link token (if valid/unexpired/unconsumed) and creates a
 // new session. Returns the raw session token, or null if the link is invalid.
 export async function consumeMagicLinkToken(db, rawToken) {
@@ -72,16 +90,7 @@ export async function consumeMagicLinkToken(db, rawToken) {
   await run(db, 'UPDATE magic_link_tokens SET consumed_at = ? WHERE id = ?', now, row.id);
   await run(db, 'UPDATE users SET last_login_at = ? WHERE id = ?', now, row.user_id);
 
-  const sessionToken = randomToken();
-  await run(
-    db,
-    'INSERT INTO sessions (user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)',
-    row.user_id,
-    await hashToken(sessionToken),
-    now,
-    now + SESSION_TTL_MS
-  );
-  return sessionToken;
+  return createSession(db, row.user_id);
 }
 
 export async function destroySession(db, rawToken) {

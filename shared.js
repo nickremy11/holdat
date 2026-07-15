@@ -33,3 +33,27 @@ function setupLeagueSwitcher() {
     location.href = u.toString();
   };
 }
+
+// Populates #authNav with "Log in" (logged out) or "{name} · Log out" (logged
+// in), reused by every page's header .controls div.
+async function setupAuthNav() {
+  const el = $('#authNav');
+  if (!el) return;
+  let session = null;
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) session = await res.json();
+  } catch {}
+
+  if (!session) {
+    el.innerHTML = `<a href="/login">Log in</a>`;
+    return;
+  }
+  const commissionerLink = session.user.isCommissioner ? `<a href="/commissioner">Commissioner</a> · ` : '';
+  el.innerHTML = `${esc(session.user.displayName)} · ${commissionerLink}<a href="#" id="logoutLink">Log out</a>`;
+  $('#logoutLink', el).onclick = async (e) => {
+    e.preventDefault();
+    await fetch('/api/auth/logout', { method: 'POST' });
+    location.reload();
+  };
+}
