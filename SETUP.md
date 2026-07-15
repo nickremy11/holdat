@@ -23,14 +23,15 @@ holdat/
 ├── login.html                 # Magic-link login page ("/login") — email in, "check your email" out
 ├── claim.html                 # Franchise-invite claim page ("/claim?token=...") — set your name, get logged in
 ├── commissioner.html          # Commissioner-only panel ("/commissioner") — invite owners per franchise
+├── settings.html               # Commissioner-only league settings ("/settings") — scoring, roster, divisions, waivers, draft, schedule params
 ├── shared.js                  # LEAGUES list, esc/displayPos/curLeague, league-switcher, setupAuthNav — used by all pages
 ├── functions/api/fantrax.js   # Pages Function — proxies Fantrax fxpa with stored cookie
 ├── functions/api/bbm.js       # Pages Function — scrapes Basketball Monster "BZ" (Bazemore) values
 ├── wrangler.toml              # Pages config (pages_build_output_dir = ".")
 ├── .dev.vars                  # local-only cookies, FANTRAX_COOKIE + BBM_COOKIE (gitignored)
-├── functions/_lib/            # db.js (D1 helpers), auth.js (sessions + createSession), email.js (magic-link + invite sender)
+├── functions/_lib/            # db.js (D1 helpers + getActiveSeasonId), auth.js (sessions + getCommissionerSession), email.js (magic-link + invite sender)
 ├── functions/api/auth/        # request-link, verify, logout, me, invite-info, claim — login + invite-claim
-├── functions/api/commissioner/ # franchises.js, invite.js — session-gated, powers /commissioner
+├── functions/api/commissioner/ # franchises.js, invite.js, settings.js (GET), settings-{general,roster,waivers,draft,schedule,divisions}.js — session-gated, powers /commissioner + /settings
 ├── functions/api/admin/       # import.js, import-player-universe.js, franchises.js, link-owner.js — curl/token-gated bootstrap
 ├── migrations/                # D1 schema, applied via `wrangler d1 migrations apply`
 ├── _redirects                 # currently a no-op — see "Current status" below
@@ -66,9 +67,23 @@ involved in what a visitor actually sees today.
   wrongly-claimed) franchise. The invitee gets an email with a `/claim?token=`
   link (`claim.html` + `functions/api/auth/{invite-info,claim}.js`), sets
   their display name, and is logged in immediately with their franchise
-  linked. **Zero accounts exist in production yet** — see "Bootstrapping the
-  commissioner" below for the one manual step every league needs before this
-  is usable.
+  linked. The commissioner account is bootstrapped (see "Bootstrapping the
+  commissioner" below); the other 13 owners haven't been invited yet.
+- **Commissioner Settings page** (`/settings`, session-gated via
+  `functions/api/commissioner/settings*.js`) — league name, scoring
+  system + categories, roster/taxi/lineup-slot counts + illegal-roster
+  toggles, waivers, draft, divisions, and schedule/playoff *parameters*
+  (dates, week counts, byes, structure). Always configures **the active
+  season only** (dynasty league — franchises/history persist across years,
+  settings are entered fresh each year). Each section saves independently
+  to its own endpoint. **Does not generate a schedule** — that's a separate
+  follow-up (the round-robin + division-doubling algorithm is
+  algorithmically independent enough to deserve its own plan). Full source
+  spec for this page (plus rules for later runtime engines — daily lineup
+  locking, trade processing, waiver claim processing — that don't exist
+  yet) is preserved outside this repo in Claude's project memory for this
+  directory, not duplicated here since it's requirements, not
+  implementation detail.
 - **Admin import tools** (`functions/api/admin/import.js`,
   `import-player-universe.js`, `franchises.js`, `link-owner.js`) —
   one-time/occasional commissioner tools gated by `ADMIN_IMPORT_TOKEN`, not
@@ -84,17 +99,19 @@ involved in what a visitor actually sees today.
   failed in production.
 
 **Not built at all**: no lineup/roster editing (`roster_entries.slot_id` is
-`NULL` for every player, `lineup_slots` has zero configured rows for any
-season, no write endpoint exists for it), no commissioner UI for roster
-rules (`season_settings` rows exist but every field is `NULL`), no team
-pages beyond the current per-season cards on `/`, no live scoring (schema
-for `games`/`player_game_stats` exists but nothing polls or computes from it).
+`NULL` for every player — `lineup_slots` now has real configured rows once
+the commissioner saves the Roster section of `/settings`, but nothing reads
+them yet), no schedule generator (the fields are captured, nothing computes
+`matchups` rows from them), no team pages beyond the current per-season
+cards on `/`, no live scoring (schema for `games`/`player_game_stats`
+exists but nothing polls or computes from it).
 
-**Next up** (in priority order): bootstrap the commissioner + invite the
-other 13 owners (below), then `lineup_slots`/`season_settings` configuration
-+ the actual lineup-editing UI/endpoint (which will also need a "which
-team am I editing" switcher for the commissioner's already-built override —
-see `canActOnFranchise()` in `functions/_lib/auth.js`), then team pages, then
+**Next up** (in priority order): invite the other 13 owners via
+`/commissioner` (commissioner is already bootstrapped), fill out
+`/settings` for the 26-27 season, then the schedule-generation algorithm,
+then the actual lineup-editing UI/endpoint (needs a "which team am I
+editing" switcher for the commissioner's already-built override — see
+`canActOnFranchise()` in `functions/_lib/auth.js`), then team pages, then
 live 9-cat head-to-head scoring polled from NBA/ESPN box scores every 20-30
 min during game windows. `index.html` should keep reading live from Fantrax
 until lineup editing ships and makes D1 authoritative for roster state —

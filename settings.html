@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Holdat — League Settings</title>
+<link rel="icon" type="image/png" href="assets/hype.png" />
+<style>
+  :root {
+    --bg: #16181c;
+    --asphalt: #1c1f24;
+    --card: #1b1f27;
+    --card2: #20242d;
+    --line: #2c313b;
+    --ink: #e8eaed;
+    --ink2: #9aa3af;
+    --ink3: #6b7280;
+    --orange: #ff6b35;
+    --teal: #2dd4bf;
+    --gold: #f2c14e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 28px 20px 100px; }
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand .logo-img {
+    height: 60px; width: 60px; border-radius: 13px; object-fit: cover; display: block;
+    border: 1px solid var(--line);
+    box-shadow: 0 0 22px rgba(255,107,53,.28);
+  }
+  .brand .sub { color: var(--ink2); font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .controls { display: flex; gap: 10px; align-items: center; }
+  .auth-nav { font-size: 13px; color: var(--ink2); white-space: nowrap; }
+  .auth-nav a { color: var(--orange); text-decoration: none; font-weight: 700; }
+  .auth-nav a:hover { text-decoration: underline; }
+  .msg { text-align: center; color: var(--ink2); padding: 60px 20px; font-size: 15px; font-weight: 600; }
+  .msg.err { color: #ff8a8a; }
+
+  section.card {
+    background: linear-gradient(180deg, var(--card2), var(--card));
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px; margin-bottom: 16px;
+  }
+  section.card h2 { font-size: 15px; margin-bottom: 4px; }
+  section.card p.hint { color: var(--ink2); font-size: 12.5px; margin-bottom: 14px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11.5px; color: var(--ink2); font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
+  .field input[type=text], .field input[type=number], .field input[type=date], .field input[type=datetime-local], .field select {
+    background: var(--asphalt); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font-size: 13.5px; min-width: 110px;
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--orange); }
+  .checkline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink2); margin-bottom: 10px; }
+  .checkline input { accent-color: var(--orange); }
+  .catgrid { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .catgrid label { display: flex; align-items: center; gap: 6px; font-size: 13px; background: var(--asphalt); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .catgrid input { accent-color: var(--orange); }
+  .slotgrid { display: grid; grid-template-columns: 1fr 70px; gap: 8px 14px; align-items: center; margin-bottom: 12px; max-width: 320px; }
+  .slotgrid .slotname { font-size: 13px; color: var(--ink2); }
+  table.teamdiv { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  table.teamdiv td { padding: 6px 4px; font-size: 13px; border-bottom: 1px solid var(--line); }
+  table.teamdiv select { width: 100%; }
+  button.save {
+    background: var(--orange); color: #1a1208; border: none;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  button.save:hover { filter: brightness(1.08); }
+  button.save:disabled { opacity: .6; cursor: default; }
+  button.secondary {
+    background: var(--card); color: var(--ink2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  button.secondary:hover { color: var(--ink); }
+  .status { font-size: 12px; font-weight: 600; margin-left: 10px; }
+  .status.ok { color: var(--teal); }
+  .status.err { color: #ff8a8a; }
+  .schedule-note { font-size: 12px; color: var(--ink3); font-style: italic; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <img class="logo-img" src="assets/hype.png" alt="Holdat — The Dynasty Begins">
+        <span class="sub">League Settings</span>
+      </div>
+      <div class="controls">
+        <span class="auth-nav" id="authNav"></span>
+      </div>
+    </header>
+    <div id="app"><div class="msg">Loading…</div></div>
+  </div>
+
+<script src="shared.js"></script>
+<script>
+const CAT_META = [
+  { code: 'PTS', label: 'Points' },
+  { code: 'REB', label: 'Rebounds' },
+  { code: 'AST', label: 'Assists' },
+  { code: 'FG%', label: 'FG%' },
+  { code: 'FT%', label: 'FT%' },
+  { code: '3PTM', label: '3PM' },
+  { code: 'ST', label: 'Steals' },
+  { code: 'BLK', label: 'Blocks' },
+  { code: 'TO', label: 'Turnovers' },
+];
+
+const DEFAULT_STARTING_SLOTS = [
+  { code: 'PG', label: 'PG', eligiblePositions: 'PG', count: 1 },
+  { code: 'SG', label: 'SG', eligiblePositions: 'SG', count: 1 },
+  { code: 'G', label: 'G', eligiblePositions: 'PG,SG', count: 3 },
+  { code: 'SF', label: 'SF', eligiblePositions: 'SF', count: 1 },
+  { code: 'PF', label: 'PF', eligiblePositions: 'PF', count: 1 },
+  { code: 'F', label: 'F', eligiblePositions: 'SF,PF', count: 3 },
+  { code: 'C', label: 'C', eligiblePositions: 'C', count: 2 },
+  { code: 'FLEX', label: 'Flex', eligiblePositions: null, count: 2 },
+];
+
+let STATE = null;
+
+function showStatus(el, ok, message) {
+  el.className = `status ${ok ? 'ok' : 'err'}`;
+  el.textContent = message;
+}
+
+async function postSettings(path, body, statusEl, btn) {
+  btn.disabled = true;
+  statusEl.textContent = '';
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'Save failed.');
+    showStatus(statusEl, true, 'Saved');
+  } catch (err) {
+    showStatus(statusEl, false, err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function settingsValue(key, fallback = '') {
+  const v = STATE.settings ? STATE.settings[key] : null;
+  return v === null || v === undefined ? fallback : v;
+}
+
+function renderApp() {
+  const s = STATE.settings || {};
+  const selectedCats = new Set((STATE.categories || []).map((c) => c.code));
+  const scoringType = s.scoring_type || 'h2h_categories';
+
+  const slotByCode = new Map((STATE.lineupSlots || []).filter((x) => x.slot_type === 'starter').map((x) => [x.code, x]));
+  const startingSlots = DEFAULT_STARTING_SLOTS.map((d) => ({ ...d, count: slotByCode.has(d.code) ? slotByCode.get(d.code).count : d.count }));
+  const benchSlot = (STATE.lineupSlots || []).find((x) => x.slot_type === 'bench');
+  const irSlot = (STATE.lineupSlots || []).find((x) => x.slot_type === 'ir');
+  const taxiSlot = (STATE.lineupSlots || []).find((x) => x.slot_type === 'taxi');
+
+  document.getElementById('app').innerHTML = `
+    <section class="card">
+      <h2>League</h2>
+      <form id="f-general">
+        <div class="row">
+          <div class="field">
+            <label>League name</label>
+            <input type="text" id="leagueName" value="${esc(STATE.league?.name || '')}" required />
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Scoring system</label>
+            <select id="scoringType">
+              <option value="rotisserie" ${scoringType === 'rotisserie' ? 'selected' : ''}>Rotisserie</option>
+              <option value="h2h_points" ${scoringType === 'h2h_points' ? 'selected' : ''}>Head-to-Head Points</option>
+              <option value="h2h_categories" ${scoringType === 'h2h_categories' ? 'selected' : ''}>Head-to-Head Categories</option>
+            </select>
+          </div>
+        </div>
+        <div class="catgrid" id="catgrid">
+          ${CAT_META.map((c) => `
+            <label><input type="checkbox" value="${c.code}" ${selectedCats.has(c.code) ? 'checked' : ''} /> ${esc(c.label)}</label>
+          `).join('')}
+        </div>
+        <button class="save" type="submit">Save</button>
+        <span class="status" id="st-general"></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Roster &amp; Lineup Slots</h2>
+      <p class="hint">Starting-lineup slot counts below are fully configurable; bench/IR/taxi are separate flat counts.</p>
+      <form id="f-roster">
+        <div class="row">
+          <div class="field"><label>Total roster spots</label><input type="number" id="rosterSize" min="1" value="${esc(settingsValue('roster_size', 14))}" /></div>
+          <div class="field"><label>IR spots</label><input type="number" id="irSlots" min="0" value="${esc(settingsValue('ir_slots', irSlot ? irSlot.count : 2))}" /></div>
+          <div class="field"><label>Taxi squad spots</label><input type="number" id="taxiSlots" min="0" value="${esc(settingsValue('taxi_slots', taxiSlot ? taxiSlot.count : 0))}" /></div>
+          <div class="field"><label>Bench spots</label><input type="number" id="benchSlots" min="0" value="${esc(settingsValue('bench_slots', benchSlot ? benchSlot.count : 3))}" /></div>
+        </div>
+        <div class="slotgrid" id="startingSlotsGrid">
+          ${startingSlots.map((sl, i) => `
+            <span class="slotname">${esc(sl.label)}</span>
+            <input type="number" min="0" data-idx="${i}" class="starting-count" value="${esc(sl.count)}" />
+          `).join('')}
+        </div>
+        <label class="checkline"><input type="checkbox" id="allowIllegalResult" ${settingsValue('allow_illegal_result', 0) ? 'checked' : ''} /> Allow lineup changes/adds that result in an illegal roster</label>
+        <label class="checkline"><input type="checkbox" id="allowLineupChangesWhileIllegal" ${settingsValue('allow_lineup_changes_while_illegal', 0) ? 'checked' : ''} /> Allow lineup changes while roster is already illegal</label>
+        <label class="checkline"><input type="checkbox" id="allowPlayerAddsWhileIllegal" ${settingsValue('allow_player_adds_while_illegal', 0) ? 'checked' : ''} /> Allow player adds while roster is already illegal</label>
+        <button class="save" type="submit">Save</button>
+        <span class="status" id="st-roster"></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Waivers</h2>
+      <form id="f-waivers">
+        <div class="row">
+          <div class="field"><label>Days on waivers</label><input type="number" id="waiverDays" min="0" value="${esc(settingsValue('waiver_days', 1))}" /></div>
+          <div class="field"><label>Max claims + FA pickups / week</label><input type="number" id="maxClaimsPerWeek" min="1" max="10" value="${esc(settingsValue('waiver_max_claims_per_week', 3))}" /></div>
+        </div>
+        <label class="checkline"><input type="checkbox" id="moveToBack" ${settingsValue('waiver_move_to_back', 1) ? 'checked' : ''} /> Move team to back of waiver order after a successful claim</label>
+        <button class="save" type="submit">Save</button>
+        <span class="status" id="st-waivers"></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Draft</h2>
+      <form id="f-draft">
+        <div class="row">
+          <div class="field"><label>Next draft date/time (optional)</label><input type="datetime-local" id="nextDraftAt" value="${settingsValue('draft_next_at') ? new Date(settingsValue('draft_next_at')).toISOString().slice(0,16) : ''}" /></div>
+          <div class="field"><label># of rounds</label>
+            <select id="rounds">
+              ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(settingsValue('draft_rounds', 3)) === n ? 'selected' : ''}>${n}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Pick time limit (hours)</label><input type="number" id="pickTimeLimitHours" min="1" value="${esc(settingsValue('draft_pick_time_limit_hours', 24))}" /></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>On timer expiry</label>
+            <select id="timeoutBehavior">
+              <option value="auto_pick" ${settingsValue('draft_timeout_behavior', 'auto_pick') === 'auto_pick' ? 'selected' : ''}>Auto-pick</option>
+              <option value="pause" ${settingsValue('draft_timeout_behavior') === 'pause' ? 'selected' : ''}>Pause draft</option>
+            </select>
+          </div>
+          <div class="field"><label>Undrafted players become</label>
+            <select id="undraftedBecomes">
+              <option value="free_agent" ${settingsValue('draft_undrafted_becomes', 'free_agent') === 'free_agent' ? 'selected' : ''}>Free agents</option>
+              <option value="waivers" ${settingsValue('draft_undrafted_becomes') === 'waivers' ? 'selected' : ''}>Waivers</option>
+            </select>
+          </div>
+        </div>
+        <button class="save" type="submit">Save</button>
+        <span class="status" id="st-draft"></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Divisions</h2>
+      <p class="hint">${(STATE.teams || []).length} teams — division count must divide evenly.</p>
+      <div class="row">
+        <div class="field"><label># of divisions</label><input type="number" id="divCount" min="0" value="${esc((STATE.divisions || []).length)}" /></div>
+        <div class="field" style="justify-content:flex-end"><button type="button" class="secondary" id="btnRebuildDivisions">Set up divisions</button></div>
+      </div>
+      <form id="f-divisions">
+        <div class="row" id="divisionNames"></div>
+        <table class="teamdiv"><tbody id="teamDivRows"></tbody></table>
+        <button class="save" type="submit">Save</button>
+        <span class="status" id="st-divisions"></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Schedule &amp; Playoffs</h2>
+      <p class="schedule-note">Schedule generation ships separately — this only saves the parameters below.</p>
+      <form id="f-schedule">
+        <div class="row">
+          <div class="field"><label>First week (Monday)</label><input type="date" id="seasonStartDate" value="${settingsValue('season_start_date') ? new Date(settingsValue('season_start_date')).toISOString().slice(0,10) : ''}" /></div>
+          <div class="field"><label>Regular season weeks</label><input type="number" id="regularSeasonWeeks" min="1" value="${esc(settingsValue('regular_season_weeks', 20))}" /></div>
+          <div class="field"><label>Playoff weeks</label>
+            <select id="playoffWeeks">
+              ${[1,2,3,4].map((n) => `<option value="${n}" ${Number(settingsValue('playoff_weeks', 3)) === n ? 'selected' : ''}>${n}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field"><label># teams receiving byes</label><input type="number" id="playoffByes" min="0" value="${esc(settingsValue('playoff_byes', 2))}" /></div>
+          <div class="field"><label>Bye criteria</label>
+            <select id="byeCriteria">
+              <option value="top2_overall" ${settingsValue('playoff_bye_criteria', 'top2_overall') === 'top2_overall' ? 'selected' : ''}>Top 2 overall records</option>
+              <option value="division_winners" ${settingsValue('playoff_bye_criteria') === 'division_winners' ? 'selected' : ''}>Division winners</option>
+              <option value="manual" ${settingsValue('playoff_bye_criteria') === 'manual' ? 'selected' : ''}>Manual</option>
+            </select>
+          </div>
+          <div class="field"><label>1st-round structure</label>
+            <select id="firstRoundStructure">
+              <option value="division_2v3" ${settingsValue('playoff_first_round_structure', 'division_2v3') === 'division_2v3' ? 'selected' : ''}>2nd vs 3rd of each division</option>
+              <option value="non_division_winner_vs_6_and_4v5" ${settingsValue('playoff_first_round_structure') === 'non_division_winner_vs_6_and_4v5' ? 'selected' : ''}>Top non-division-winner vs 6th, 4th vs 5th</option>
+            </select>
+          </div>
+        </div>
+        <button class="save" type="submit">Save</button>
+        <span class="status" id="st-schedule"></span>
+      </form>
+    </section>
+  `;
+
+  renderDivisionInputs(STATE.divisions && STATE.divisions.length ? STATE.divisions : null);
+  wireForms(startingSlots);
+}
+
+function renderDivisionInputs(existingDivisions) {
+  const count = parseInt(document.getElementById('divCount').value, 10) || 0;
+  const names = document.getElementById('divisionNames');
+  const teams = STATE.teams || [];
+  const divs = existingDivisions && existingDivisions.length === count ? existingDivisions : Array.from({ length: count }, (_, i) => ({ id: null, name: `Division ${i + 1}` }));
+
+  names.innerHTML = divs.map((d, i) => `
+    <div class="field">
+      <label>Division ${i + 1} name</label>
+      <input type="text" class="div-name" data-idx="${i}" value="${esc(d.name)}" />
+    </div>
+  `).join('');
+
+  const teamDivIndex = new Map();
+  teams.forEach((t) => {
+    if (t.division_id == null) return;
+    const idx = (existingDivisions || []).findIndex((d) => d.id === t.division_id);
+    if (idx >= 0) teamDivIndex.set(t.id, idx);
+  });
+
+  document.getElementById('teamDivRows').innerHTML = teams.map((t) => `
+    <tr>
+      <td>${esc(t.name)}</td>
+      <td>
+        <select class="team-div-select" data-team="${t.id}">
+          <option value="">— unassigned —</option>
+          ${divs.map((d, i) => `<option value="${i}" ${teamDivIndex.get(t.id) === i ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
+        </select>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function wireForms(startingSlots) {
+  document.getElementById('btnRebuildDivisions').onclick = () => renderDivisionInputs(null);
+
+  document.getElementById('f-general').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const categories = [...document.querySelectorAll('#catgrid input:checked')].map((c) => c.value);
+    postSettings('/api/commissioner/settings-general', {
+      leagueName: document.getElementById('leagueName').value.trim(),
+      scoringType: document.getElementById('scoringType').value,
+      categories,
+    }, document.getElementById('st-general'), e.submitter);
+  });
+
+  document.getElementById('f-roster').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const counts = [...document.querySelectorAll('.starting-count')];
+    const slots = startingSlots.map((sl, i) => ({
+      code: sl.code, label: sl.label, eligiblePositions: sl.eligiblePositions,
+      count: parseInt(counts[i].value, 10) || 0,
+    }));
+    postSettings('/api/commissioner/settings-roster', {
+      rosterSize: document.getElementById('rosterSize').value,
+      benchSlots: document.getElementById('benchSlots').value,
+      irSlots: document.getElementById('irSlots').value,
+      taxiSlots: document.getElementById('taxiSlots').value,
+      startingSlots: slots,
+      allowIllegalResult: document.getElementById('allowIllegalResult').checked,
+      allowLineupChangesWhileIllegal: document.getElementById('allowLineupChangesWhileIllegal').checked,
+      allowPlayerAddsWhileIllegal: document.getElementById('allowPlayerAddsWhileIllegal').checked,
+    }, document.getElementById('st-roster'), e.submitter);
+  });
+
+  document.getElementById('f-waivers').addEventListener('submit', (e) => {
+    e.preventDefault();
+    postSettings('/api/commissioner/settings-waivers', {
+      waiverDays: document.getElementById('waiverDays').value,
+      maxClaimsPerWeek: document.getElementById('maxClaimsPerWeek').value,
+      moveToBack: document.getElementById('moveToBack').checked,
+    }, document.getElementById('st-waivers'), e.submitter);
+  });
+
+  document.getElementById('f-draft').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const raw = document.getElementById('nextDraftAt').value;
+    postSettings('/api/commissioner/settings-draft', {
+      nextDraftAt: raw ? new Date(raw).getTime() : null,
+      rounds: document.getElementById('rounds').value,
+      pickTimeLimitHours: document.getElementById('pickTimeLimitHours').value,
+      timeoutBehavior: document.getElementById('timeoutBehavior').value,
+      undraftedBecomes: document.getElementById('undraftedBecomes').value,
+    }, document.getElementById('st-draft'), e.submitter);
+  });
+
+  document.getElementById('divCount').addEventListener('change', () => renderDivisionInputs(null));
+
+  document.getElementById('f-divisions').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const names = [...document.querySelectorAll('.div-name')].map((el) => el.value.trim());
+    const divisions = names.map((name) => ({ name, teamIds: [] }));
+    document.querySelectorAll('.team-div-select').forEach((sel) => {
+      if (sel.value === '') return;
+      divisions[parseInt(sel.value, 10)].teamIds.push(parseInt(sel.dataset.team, 10));
+    });
+    postSettings('/api/commissioner/settings-divisions', { divisions }, document.getElementById('st-divisions'), e.submitter);
+  });
+
+  document.getElementById('f-schedule').addEventListener('submit', (e) => {
+    e.preventDefault();
+    postSettings('/api/commissioner/settings-schedule', {
+      seasonStartDate: new Date(document.getElementById('seasonStartDate').value).getTime(),
+      regularSeasonWeeks: document.getElementById('regularSeasonWeeks').value,
+      playoffWeeks: document.getElementById('playoffWeeks').value,
+      playoffByes: document.getElementById('playoffByes').value,
+      byeCriteria: document.getElementById('byeCriteria').value,
+      firstRoundStructure: document.getElementById('firstRoundStructure').value,
+    }, document.getElementById('st-schedule'), e.submitter);
+  });
+}
+
+async function load() {
+  setupAuthNav();
+
+  let session = null;
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) session = await res.json();
+  } catch {}
+
+  if (!session) { location.href = '/login'; return; }
+  if (!session.user.isCommissioner) {
+    document.getElementById('app').innerHTML = `<div class="msg err">Commissioners only.</div>`;
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/commissioner/settings');
+    if (!res.ok) throw new Error();
+    STATE = await res.json();
+    renderApp();
+  } catch {
+    document.getElementById('app').innerHTML = `<div class="msg err">Failed to load settings.</div>`;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

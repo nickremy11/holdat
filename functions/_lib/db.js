@@ -15,6 +15,15 @@ export async function run(db, sql, ...params) {
   return db.prepare(sql).bind(...params).run();
 }
 
+// Every commissioner Settings endpoint operates on "the season being
+// configured right now" -- always the active one, never a frozen historical
+// season (see league_rules_spec memory: dynasty league, settings entered
+// fresh each year for the coming season).
+export async function getActiveSeasonId(db) {
+  const row = await first(db, "SELECT id FROM seasons WHERE status = 'active'");
+  return row?.id ?? null;
+}
+
 // Natural-key upsert: INSERT ... ON CONFLICT(keyCols) DO UPDATE SET the rest,
 // returning the row's id. Every importer write goes through this so re-running
 // the importer for any season is always safe. keyCols must be covered by a

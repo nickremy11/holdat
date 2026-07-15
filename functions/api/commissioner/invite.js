@@ -6,7 +6,7 @@
 // owner_user_id, which doubles as the "fix a wrong claim" path.
 
 import { json, first, run } from '../../_lib/db.js';
-import { getSession, randomToken, hashToken } from '../../_lib/auth.js';
+import { getCommissionerSession, randomToken, hashToken } from '../../_lib/auth.js';
 import { sendInviteEmail } from '../../_lib/email.js';
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -15,10 +15,8 @@ export async function onRequestPost(context) {
   const { env, request } = context;
   if (!env.DB) return json({ error: 'DB is not configured on this Pages project.' }, 500);
 
-  const session = await getSession(context);
-  if (!session || !session.user.isCommissioner) {
-    return json({ error: 'Commissioners only.' }, 403);
-  }
+  const session = await getCommissionerSession(context);
+  if (!session) return json({ error: 'Commissioners only.' }, 403);
 
   let body;
   try {

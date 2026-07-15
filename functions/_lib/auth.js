@@ -130,6 +130,13 @@ export async function getSession(context) {
   };
 }
 
+// Resolves the session only if it belongs to a commissioner, else null.
+// Every functions/api/commissioner/*.js endpoint gates on this.
+export async function getCommissionerSession(context) {
+  const session = await getSession(context);
+  return session && session.user.isCommissioner ? session : null;
+}
+
 // True if `session` may act on behalf of `franchiseId` (own it, or be commissioner).
 export function canActOnFranchise(session, franchiseId) {
   if (!session) return false;

@@ -6,15 +6,13 @@
 // the admin version; duplicated rather than shared since it's five lines.
 
 import { json, all } from '../../_lib/db.js';
-import { getSession } from '../../_lib/auth.js';
+import { getCommissionerSession } from '../../_lib/auth.js';
 
 export async function onRequestGet(context) {
   if (!context.env.DB) return json({ error: 'DB is not configured on this Pages project.' }, 500);
 
-  const session = await getSession(context);
-  if (!session || !session.user.isCommissioner) {
-    return json({ error: 'Commissioners only.' }, 403);
-  }
+  const session = await getCommissionerSession(context);
+  if (!session) return json({ error: 'Commissioners only.' }, 403);
 
   const franchises = await all(
     context.env.DB,
